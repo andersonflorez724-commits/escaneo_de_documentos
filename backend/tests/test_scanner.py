@@ -9,11 +9,12 @@ import numpy as np
 import pytest
 
 from app.core.config import get_settings
+from app.core.errors import PayloadTooLargeError
 from app.services.face_detector import HeuristicFaceDetector
 from app.services.image_utils import InvalidImageError
 from app.services.scanner import DocumentScanner, ScanResult, mask_document_number
 from app.services.ocr_engine import get_ocr_engine
-from tests.fixtures import ICAO_TD3_LINES, document_bytes, encode, render_synthetic_document
+from tests.fixtures import ICAO_TD3_LINES, build_td3_mrz, document_bytes, encode, render_synthetic_document
 from tests.stubs import FailingOCREngine, RecordingHeuristicEngine, StubOCREngine
 
 COLOMBIAN_ID_TEXT = [
@@ -169,8 +170,11 @@ class TestErrorHandling:
     def test_rejects_an_image_over_the_size_limit(self) -> None:
         scanner = build_scanner(max_upload_mb=0)
 
-        with pytest.raises(InvalidImageError, match="limite"):
+        with pytest.raises(PayloadTooLargeError, match="limite") as ctx:
             scanner.scan(document_bytes())
+
+        # El manejador global debe traducirlo a un 413.
+        assert ctx.value.status_code == 413
 
     def test_propagates_engine_failures(self) -> None:
         scanner = DocumentScanner(
@@ -181,6 +185,46 @@ class TestErrorHandling:
 
         with pytest.raises(RuntimeError, match="fallo simulado"):
             scanner.scan(document_bytes())
+
+
+class TestResponseOptimization:
+    """Ajustes de rendimiento del pipeline."""
+
+    def test_skips_the_extra_mrz_passes_when_the_first_read_is_enough(self) -> None:
+        # La lectura de la pagina completa ya trae una MRZ valida y completa:
+        # no hace falta invertir dos inferencias mas.
+        engine = StubOCREngine([*COLOMBIAN_ID_TEXT, *build_td3_mrz()])
+        scanner = DocumentScanner(engine=engine, face_detector=HeuristicFaceDetector())
+
+        result = scanner.scan(document_bytes())
+
+        assert result.mrz.valid is True
+        assert result.used_mrz_passes is False
+        assert len(engine.calls) == 1
+
+    def test_runs_the_extra_passes_when_the_mrz_is_missing(self) -> None:
+        engine = StubOCREngine(COLOMBIAN_ID_TEXT)
+        scanner = DocumentScanner(engine=engine, face_detector=HeuristicFaceDetector())
+
+        result = scanner.scan(document_bytes())
+
+        assert result.used_mrz_passes is True
+        assert len(engine.calls) == 3
+
+    def test_caps_the_amount_of_raw_text_returned(self) -> None:
+        many_lines = [f"LINEA DE TEXTO {index}" for index in range(200)]
+        scanner = build_scanner(many_lines, ocr_max_text_lines=10)
+
+        result = scanner.scan(document_bytes())
+
+        assert len(result.text_lines) <= 10
+
+    def test_keeps_every_line_when_under_the_cap(self) -> None:
+        scanner = build_scanner(COLOMBIAN_ID_TEXT, ocr_max_text_lines=80)
+
+        result = scanner.scan(document_bytes())
+
+        assert len(result.text_lines) == len(COLOMBIAN_ID_TEXT)
 
 
 class TestEngineWithoutRecognition:

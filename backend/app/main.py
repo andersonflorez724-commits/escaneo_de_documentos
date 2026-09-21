@@ -8,20 +8,44 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.handlers import register_exception_handlers
+from app.core.middleware import RequestContextMiddleware
 from app.services.ocr_engine import get_ocr_engine, warmup_ocr_engine
 from app.services.users import get_user_repository
 
 logger = logging.getLogger(__name__)
+
+# Respuestas mas pequenas que esto no se comprimen: el coste no compensa.
+GZIP_MINIMUM_SIZE = 1024
+
+OPENAPI_TAGS = [
+    {"name": "Sistema", "description": "Salud y disponibilidad del servicio."},
+    {
+        "name": "Autenticacion",
+        "description": (
+            "Registro e inicio de sesion. Devuelve el **JWT** que hay que "
+            "enviar en la cabecera `Authorization: Bearer <token>`."
+        ),
+    },
+    {
+        "name": "Documentos",
+        "description": (
+            "Lectura e inspeccion de documentos de identificacion: OCR con "
+            "modelo preentrenado, deteccion de rostro y validacion de la MRZ."
+        ),
+    },
+]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001 - firma de FastAPI
     """Carga el modelo preentrenado al arrancar el proceso.
 
-    Los pesos de EasyOCR tardan varios segundos en cargarse. Hacerlo aqui
+    Los pesos de EasyOCR tardan varios segundos en cargarse; hacerlo aqui
     evita que la primera peticion del usuario pague ese coste.
     """
     warmup_ocr_engine()
@@ -42,33 +66,13 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         openapi_url="/openapi.json",
         lifespan=lifespan,
-        contact={
-            "name": "Anderson Florez",
-            "email": "andersonflorez724@gmail.com",
-        },
+        openapi_tags=OPENAPI_TAGS,
+        contact={"name": "Anderson Florez", "email": "andersonflorez724@gmail.com"},
         license_info={"name": "MIT"},
-        openapi_tags=[
-            {
-                "name": "Sistema",
-                "description": "Salud y disponibilidad del servicio.",
-            },
-            {
-                "name": "Autenticacion",
-                "description": (
-                    "Registro e inicio de sesion. Devuelve el **JWT** que hay que "
-                    "enviar en la cabecera `Authorization: Bearer <token>`."
-                ),
-            },
-            {
-                "name": "Documentos",
-                "description": (
-                    "Lectura e inspeccion de documentos de identificacion: OCR con "
-                    "modelo preentrenado, deteccion de rostro y validacion de la MRZ."
-                ),
-            },
-        ],
     )
 
+    # ------------------------------- Middleware ----------------------------
+    # El orden importa: el ultimo anadido es el mas externo.
     if settings.allowed_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -78,13 +82,22 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
+    if settings.enable_gzip:
+        app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_SIZE)
+
+    app.add_middleware(RequestContextMiddleware)
+
+    # --------------------------- Errores uniformes -------------------------
+    register_exception_handlers(app)
+
+    # -------------------------------- Rutas --------------------------------
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
     # Usuario semilla para poder probar el flujo completo sin base de datos.
     seed_user = get_user_repository().ensure_seed_user()
     logger.info("Usuario semilla disponible: %s", seed_user.email)
     logger.info(
-        "Motor de OCR configurado: %s (se cargara en el arranque)",
+        "Motor de OCR configurado: %s (se carga en el arranque)",
         get_ocr_engine().name,
     )
     logger.info("FastAPI listo: %s v%s", settings.app_name, settings.app_version)

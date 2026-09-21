@@ -15,6 +15,8 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from app.core.errors import AppError
+
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - depende del entorno
@@ -35,8 +37,16 @@ BRIGHT_THRESHOLD = 215.0
 MIN_MEGAPIXELS = 0.12
 
 
-class InvalidImageError(ValueError):
-    """La imagen no se pudo decodificar o no tiene un formato soportado."""
+class InvalidImageError(AppError):
+    """La imagen no se pudo decodificar o no tiene un formato soportado.
+
+    Hereda de :class:`AppError`, de modo que el manejador global la traduce a
+    un **422** con el formato de error uniforme de la API.
+    """
+
+    status_code = 422
+    code = "invalid_image"
+    default_message = "No se pudo leer la imagen. Envia una foto en formato JPEG o PNG."
 
 
 # ---------------------------------------------------------------------------

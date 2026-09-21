@@ -57,6 +57,8 @@
           </div>
         </div>
 
+        <p class="field__hint">Atajos: <kbd>Espacio</kbd> para capturar, <kbd>Esc</kbd> para descartar.</p>
+
         <div class="camera-controls">
           <button type="button" class="btn btn--light" id="btn-start">Encender camara</button>
           <button
@@ -131,7 +133,12 @@
         <div class="panel-dark">
           <div class="row row--between">
             <h2 class="card__title" style="margin:0;font-size:1.05rem">Datos extraidos</h2>
-            <span id="result-status"></span>
+            <div class="row">
+              <button type="button" class="btn btn--ghost btn--sm" id="btn-copy" title="Copiar los datos para pegarlos en tu sistema">
+                Copiar datos
+              </button>
+              <span id="result-status"></span>
+            </div>
           </div>
 
           <div class="field-list mt-1">

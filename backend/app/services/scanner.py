@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 
 from app.core.config import Settings, get_settings
+from app.core.errors import DocumentScanError, PayloadTooLargeError
 from app.services.document_parser import DocumentFields, parse_document
 from app.services.face_detector import BaseFaceDetector, FaceDetection, get_face_detector
 from app.services.image_utils import (
@@ -60,8 +61,13 @@ PREVIEW_MAX_DIMENSION = 900
 PREVIEW_JPEG_QUALITY = 70
 
 
-class DocumentScanError(RuntimeError):
-    """Fallo controlado durante el procesamiento del documento."""
+__all__ = [
+    "DocumentScanError",
+    "DocumentScanner",
+    "ScanResult",
+    "get_document_scanner",
+    "mask_document_number",
+]
 
 
 @dataclass(slots=True)
@@ -80,6 +86,7 @@ class ScanResult:
     text_lines: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     preview_jpeg: bytes | None = None
+    used_mrz_passes: bool = False
 
     @property
     def document_number(self) -> str | None:
@@ -164,6 +171,7 @@ class DocumentScanner:
         self.settings = settings or get_settings()
         self._engine = engine
         self._face_detector = face_detector
+        self.used_mrz_passes = False
 
     # ------------------------------------------------------------ dependencias
     @property
@@ -192,7 +200,7 @@ class DocumentScanner:
             DocumentScanError: si el motor de OCR falla inesperadamente.
         """
         if len(data) > self.settings.max_upload_bytes:
-            raise InvalidImageError(
+            raise PayloadTooLargeError(
                 f"La imagen supera el limite de {self.settings.max_upload_mb} MB."
             )
 
@@ -229,8 +237,15 @@ class DocumentScanner:
         enhanced = enhance_for_ocr(image)
         blocks = self.engine.read(enhanced)
 
-        # 7. Pasadas dedicadas a la MRZ (franja inferior ampliada).
-        blocks.extend(self._read_mrz_passes(image))
+        # 7. Pasadas extra dedicadas a la MRZ.
+        #    Solo se ejecutan si la lectura de la pagina completa no basto:
+        #    en documentos bien encuadrados esto ahorra dos tercios del tiempo
+        #    de inferencia.
+        preliminary = extract_and_validate([block.text for block in blocks])
+        self.used_mrz_passes = not (preliminary.detected and preliminary.valid and preliminary.complete)
+
+        if self.used_mrz_passes:
+            blocks.extend(self._read_mrz_passes(image))
 
         blocks = _dedupe_blocks(blocks)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
@@ -276,9 +291,10 @@ class DocumentScanner:
             processing_ms=elapsed_ms,
             document_detected=document_detected,
             deskew_angle=deskew_angle,
-            text_lines=ocr.lines,
+            text_lines=ocr.lines[: self.settings.ocr_max_text_lines],
             warnings=list(dict.fromkeys(warnings)),
             preview_jpeg=preview,
+            used_mrz_passes=self.used_mrz_passes,
         )
 
     def _read_mrz_passes(self, image: np.ndarray) -> list[TextBlock]:
@@ -317,12 +333,3 @@ _scanner = DocumentScanner()
 def get_document_scanner() -> DocumentScanner:
     """Dependencia de FastAPI que entrega el escaner configurado."""
     return _scanner
-
-
-__all__ = [
-    "DocumentScanError",
-    "DocumentScanner",
-    "ScanResult",
-    "get_document_scanner",
-    "mask_document_number",
-]

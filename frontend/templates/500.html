@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}Error del servidor &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="card card--form card--center">
+  <span class="card__icon" aria-hidden="true">⚠️</span>
+  <h1 class="card__title">Ocurrio un error</h1>
+  <p class="card__text">
+    No pudimos completar la operacion. Vuelve a intentarlo en unos segundos;
+    si el problema persiste, avisa al administrador.
+  </p>
+  <a class="btn btn--primary mt-2" href="/">Volver al inicio</a>
+</div>
+{% endblock %}

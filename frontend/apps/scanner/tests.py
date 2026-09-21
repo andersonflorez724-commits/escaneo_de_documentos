@@ -57,6 +57,23 @@ class ScannerPageTests(TestCase):
         response = self.client.get(reverse("scanner:index"))
         self.assertContains(response, "data-max-upload-mb")
 
+    def test_page_offers_copying_the_extracted_data(self) -> None:
+        response = self.client.get(reverse("scanner:index"))
+        self.assertContains(response, 'id="btn-copy"')
+
+    def test_page_documents_the_keyboard_shortcuts(self) -> None:
+        response = self.client.get(reverse("scanner:index"))
+        self.assertContains(response, "<kbd>Espacio</kbd>")
+        self.assertContains(response, "<kbd>Esc</kbd>")
+
+    def test_page_includes_the_toast_region(self) -> None:
+        response = self.client.get(reverse("scanner:index"))
+        self.assertContains(response, 'id="toast"')
+
+    def test_page_marks_the_results_region_for_screen_readers(self) -> None:
+        response = self.client.get(reverse("scanner:index"))
+        self.assertContains(response, 'aria-live="polite"')
+
 
 class HistoryPageTests(TestCase):
     def setUp(self) -> None:

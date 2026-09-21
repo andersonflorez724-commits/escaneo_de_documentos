@@ -108,6 +108,13 @@ class Settings:
     max_image_dimension: int = 1600
     face_detector: str = "auto"
 
+    # Maximo de lineas de texto devueltas al cliente. El texto crudo del OCR
+    # es util para depurar, pero infla la respuesta: se recorta.
+    ocr_max_text_lines: int = 80
+
+    # Cuando es True la respuesta se comprime (gzip) si el cliente lo acepta.
+    enable_gzip: bool = True
+
     # --------------------------- Subidas -----------------------------------
     max_upload_mb: int = 8
 
@@ -137,6 +144,8 @@ def _build_settings() -> Settings:
         ocr_min_confidence=_as_float(env.get("OCR_MIN_CONFIDENCE"), 0.30),
         max_image_dimension=_as_int(env.get("MAX_IMAGE_DIMENSION"), 1600),
         face_detector=(env.get("FACE_DETECTOR") or "auto").strip().lower(),
+        ocr_max_text_lines=_as_int(env.get("OCR_MAX_TEXT_LINES"), 80),
+        enable_gzip=_as_bool(env.get("ENABLE_GZIP"), True),
         max_upload_mb=_as_int(env.get("MAX_UPLOAD_MB"), 8),
     )
 

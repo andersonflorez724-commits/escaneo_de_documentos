@@ -53,6 +53,8 @@
     {% block content %}{% endblock %}
   </main>
 
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
   <footer class="footer">
     <div class="footer__inner">
       <span>&copy; {% now "Y" %} {{ app_name }} &middot; v{{ app_version }}</span>

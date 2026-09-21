@@ -163,10 +163,22 @@ class DocumentScanResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Formato uniforme de los errores de la API."""
+    """Formato uniforme de los errores de la API.
 
-    detail: str = Field(description="Descripcion del error.", examples=["La imagen supera el limite de 8 MB."])
-    code: str | None = Field(default=None, description="Codigo interno del error.", examples=["invalid_image"])
+    Todas las respuestas con codigo >= 400 comparten esta forma, de modo que
+    el cliente pueda tratarlas igual sin inspeccionar el cuerpo.
+    """
+
+    detail: str | list[dict[str, Any]] = Field(
+        description="Descripcion del error o lista de errores de validacion.",
+        examples=["La imagen supera el limite de 8 MB."],
+    )
+    code: str = Field(description="Codigo interno del error.", examples=["invalid_image"])
+    request_id: str | None = Field(
+        default=None,
+        description="Identificador de la peticion, para correlacionar con los registros.",
+        examples=["9f2a1c3d4e5b6a7c"],
+    )
     context: dict[str, Any] | None = Field(default=None, description="Informacion adicional para depuracion.")
 
 

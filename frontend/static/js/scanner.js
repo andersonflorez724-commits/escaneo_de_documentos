@@ -19,7 +19,9 @@ function ScannerUI(element) {
   this.camera = null;
   this.pendingFile = null;
   this.previewUrl = null;
+  this.lastResult = null;
   this.busy = false;
+  this.toastTimer = null;
 }
 
 /* ------------------------------------------------------------------ init */
@@ -50,6 +52,8 @@ ScannerUI.prototype.init = function init() {
     progress: document.getElementById('progress'),
     progressBar: document.getElementById('progress-bar'),
     error: document.getElementById('capture-error'),
+    btnCopy: document.getElementById('btn-copy'),
+    toast: document.getElementById('toast'),
 
     resultsEmpty: document.getElementById('results-empty'),
     resultsLoading: document.getElementById('results-loading'),
@@ -68,9 +72,37 @@ ScannerUI.prototype.init = function init() {
 
   this.bindUpload();
   this.bindActions();
+  this.bindShortcuts();
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && this.camera) this.camera.stop();
+  });
+};
+
+/** Atajos de teclado para agilizar la operacion en recepcion. */
+ScannerUI.prototype.bindShortcuts = function bindShortcuts() {
+  document.addEventListener('keydown', (event) => {
+    const target = event.target;
+    const typing = target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+    if (typing || event.repeat) return;
+
+    if (event.code === 'Space' && this.camera?.isActive && !this.pendingFile) {
+      event.preventDefault();
+      this.captureFrame();
+      return;
+    }
+
+    if (event.key === 'Escape' && this.pendingFile) {
+      event.preventDefault();
+      this.discard();
+      return;
+    }
+
+    if (event.key === 'Enter' && this.pendingFile && !this.busy && document.activeElement !== this.el.btnProcess) {
+      event.preventDefault();
+      this.process();
+    }
   });
 };
 
@@ -234,6 +266,45 @@ ScannerUI.prototype.setPendingFile = function setPendingFile(file, dataUrl, meta
 ScannerUI.prototype.bindActions = function bindActions() {
   this.el.btnDiscard.addEventListener('click', () => this.discard());
   this.el.btnProcess.addEventListener('click', () => this.process());
+  this.el.btnCopy.addEventListener('click', () => this.copyData());
+};
+
+/** Copia los datos en texto plano para pegarlos en el sistema de recepcion. */
+ScannerUI.prototype.copyData = async function copyData() {
+  if (!this.lastResult) {
+    this.showToast('Todavia no hay datos que copiar.', 'warn');
+    return;
+  }
+
+  const text = formatResultAsText(this.lastResult);
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      copyWithFallback(text);
+    }
+    this.showToast('Datos copiados al portapapeles.');
+  } catch {
+    this.showToast('El navegador bloqueo el portapapeles. Selecciona y copia manualmente.', 'warn');
+  }
+};
+
+ScannerUI.prototype.showToast = function showToast(message, tone = 'ok') {
+  if (!this.el.toast) return;
+
+  this.el.toast.textContent = message;
+  this.el.toast.className = `toast toast--${tone} is-visible`;
+
+  window.clearTimeout(this.toastTimer);
+  this.toastTimer = window.setTimeout(() => {
+    this.el.toast.classList.remove('is-visible');
+  }, 3200);
+};
+
+ScannerUI.prototype.clearToast = function clearToast() {
+  window.clearTimeout(this.toastTimer);
+  if (this.el.toast) this.el.toast.classList.remove('is-visible');
 };
 
 ScannerUI.prototype.discard = function discard() {
@@ -255,6 +326,8 @@ ScannerUI.prototype.setBusy = function setBusy(busy) {
 
   this.el.progress.classList.toggle('hidden', !busy);
   this.el.progressBar.style.width = busy ? '70%' : '0%';
+
+  this.root.setAttribute('aria-busy', String(busy));
 };
 
 ScannerUI.prototype.process = async function process() {
@@ -302,6 +375,11 @@ ScannerUI.prototype.process = async function process() {
   }
 };
 
+ScannerUI.prototype.dismissMessages = function dismissMessages() {
+  this.clearError();
+  this.clearToast();
+};
+
 /* -------------------------------------------------------------- pintado */
 ScannerUI.prototype.showLoading = function showLoading() {
   this.el.resultsEmpty.classList.add('hidden');
@@ -316,6 +394,7 @@ ScannerUI.prototype.hideResults = function hideResults() {
 };
 
 ScannerUI.prototype.renderResult = function renderResult(data) {
+  this.lastResult = data;
   this.el.resultsLoading.classList.add('hidden');
   this.el.resultsEmpty.classList.add('hidden');
   this.el.resultsContent.classList.remove('hidden');
@@ -449,6 +528,39 @@ function getCsrfToken() {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
+/** Resumen en texto plano de los datos extraidos. */
+function formatResultAsText(data) {
+  const fields = data.fields ?? {};
+  const mrz = data.mrz ?? {};
+  const yesNo = (value) => (value ? 'Si' : 'No');
+
+  const lines = [
+    `Numero de documento: ${data.document_number ?? '-'}`,
+    `Nombre: ${data.name ?? '-'}`,
+    `Tipo: ${data.document_type ?? '-'}`,
+    `Fecha de nacimiento: ${fields.birth_date ?? '-'}`,
+    `Caducidad: ${fields.expiry_date ?? '-'}`,
+    `Foto valida: ${yesNo(data.valid_photo)}`,
+    mrz.detected
+      ? `MRZ (${mrz.format}): ${mrz.valid ? 'consistente' : `inconsistente (${mrz.passed_checks}/${mrz.total_checks})`}`
+      : 'MRZ: no detectada',
+  ];
+
+  return lines.join('\n');
+}
+
+function copyWithFallback(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand('copy');
+  document.body.removeChild(area);
+}
+
 function extractError(payload, status) {
   const detail = payload?.detail;
 
@@ -465,4 +577,4 @@ function extractError(payload, status) {
   return 'No se pudo procesar la imagen. Intenta con otra fotografia.';
 }
 
-export { ScannerUI, getCsrfToken };
+export { ScannerUI, formatResultAsText, getCsrfToken };

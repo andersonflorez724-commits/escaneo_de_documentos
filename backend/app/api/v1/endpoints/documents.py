@@ -18,11 +18,10 @@ from app.schemas.document import (
     MRZValidationResponse,
     QualityInfo,
 )
-from app.services.image_utils import ALLOWED_MIME_TYPES, InvalidImageError
+from app.services.image_utils import ALLOWED_MIME_TYPES
 from app.services.mrz import extract_and_validate, parse_mrz
 from app.services.scanner import (
     DocumentScanner,
-    DocumentScanError,
     ScanResult,
     get_document_scanner,
     mask_document_number,
@@ -186,31 +185,16 @@ async def scan_document(
 ) -> DocumentScanResponse:
     data = await _read_upload(file, settings.max_upload_bytes)
 
-    try:
-        result = scanner.scan(data, include_preview=include_preview)
-    except InvalidImageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-    except DocumentScanError as exc:
-        logger.warning("Fallo el procesamiento del documento: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="No se pudo procesar el documento.",
-        ) from exc
-    except Exception as exc:  # pragma: no cover - salvaguarda
-        logger.exception("Error inesperado procesando el documento")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error interno al procesar la imagen.",
-        ) from exc
+    # Los errores de dominio (imagen invalida, demasiado grande, motor no
+    # disponible) los traduce el manejador global con el formato uniforme.
+    result = scanner.scan(data, include_preview=include_preview)
 
     logger.info(
-        "Usuario %s escaneo un documento (numero=%s, confianza=%.2f)",
+        "Usuario %s escaneo un documento (numero=%s, confianza=%.2f, mrz_extra=%s)",
         current_user.email,
         mask_document_number(result.document_number),
         result.confidence,
+        result.used_mrz_passes,
     )
 
     return _build_response(result)

@@ -217,6 +217,8 @@ code, .mono { font-family: var(--mono); font-size: .86em; }
   background: rgba(37, 99, 235, .1);
   color: #d6e2fb;
   font-size: .9rem;
+  /* Los avisos se difuminan solos para no estorbar en pantallas pequenas. */
+  animation: flash-out .6s ease 6s forwards;
 }
 .flash--success { border-left-color: var(--success); background: rgba(22, 163, 74, .14); color: #c9f3d9; }
 .flash--error, .flash--danger { border-left-color: var(--danger); background: rgba(220, 38, 38, .14); color: #fbd5d5; }
@@ -451,6 +453,56 @@ table.table tbody tr:hover { background: #fafbfe; }
 }
 
 .mt-1 { margin-top: .75rem; }
+
+/* -------------------------------- Toast ---------------------------------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.4rem;
+  transform: translate(-50%, 1.5rem);
+  z-index: 60;
+  max-width: min(92vw, 460px);
+  padding: .75rem 1.15rem;
+  border-radius: 999px;
+  background: #101a2e;
+  border: 1px solid rgba(255, 255, 255, .18);
+  color: #e9eefb;
+  font-size: .88rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .2s ease, transform .2s ease, visibility .2s;
+  pointer-events: none;
+}
+.toast.is-visible { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.toast--warn { border-color: rgba(217, 119, 6, .6); color: #fbe3bd; }
+
+/* ------------------------------ Atajos / kbd ----------------------------- */
+kbd {
+  display: inline-block;
+  padding: .1rem .42rem;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .1);
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: #e6edfa;
+}
+
+/* --------------------- Aparicion del panel de resultados ----------------- */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+#results-content > * { animation: rise-in .28s ease both; }
+#results-content > *:nth-child(2) { animation-delay: .05s; }
+#results-content > *:nth-child(3) { animation-delay: .1s; }
+
+@keyframes flash-out {
+  to { opacity: 0; transform: translateY(-6px); visibility: hidden; }
+}
 
 /* ------------------------------- Responsive ------------------------------ */
 @media (max-width: 720px) {
