@@ -378,10 +378,102 @@ table.table tbody tr:hover { background: #fafbfe; }
 }
 .progress__bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--primary), var(--accent)); transition: width .25s ease; }
 
+/* ---------------------------- Encabezado de pagina ----------------------- */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.page-head__title { margin: 0 0 .35rem; color: #fff; font-size: clamp(1.4rem, 2.6vw, 1.9rem); letter-spacing: -.015em; }
+.page-head__lead { margin: 0; max-width: 68ch; color: #b6c4de; font-size: .93rem; line-height: 1.6; }
+
+/* --------------------------------- Tabs ---------------------------------- */
+.tabs {
+  display: inline-flex;
+  gap: .25rem;
+  padding: .25rem;
+  margin-bottom: 1rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .08);
+}
+.tab {
+  border: 0;
+  background: transparent;
+  color: #c7d2e6;
+  padding: .45rem 1.05rem;
+  border-radius: 999px;
+  font: inherit;
+  font-size: .87rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
+}
+.tab:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+.tab.is-active { background: #fff; color: var(--text); }
+
+/* ------------------------------ Vista previa ----------------------------- */
+.preview-block {
+  margin-top: 1.1rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+}
+.preview-block .row strong { color: #fff; font-size: .92rem; }
+.capture-preview {
+  max-height: 320px;
+  width: 100%;
+  object-fit: contain;
+  background: #05070f;
+}
+
+/* ------------------------- Listas y bloques de texto --------------------- */
+.warning-list { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
+.warning-list li { color: var(--warning); font-size: .88rem; line-height: 1.5; }
+
+.mrz-lines, .ocr-text {
+  margin: .9rem 0 0;
+  padding: .85rem .95rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: .78rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 260px;
+  color: #2b3855;
+}
+
+.mt-1 { margin-top: .75rem; }
+
 /* ------------------------------- Responsive ------------------------------ */
 @media (max-width: 720px) {
   .nav__username { display: none; }
   .hero { padding-top: 1.5rem; }
   .main { padding: 1.25rem .9rem 2.5rem; }
   .card--form { margin: 1rem auto; padding: 1.35rem; }
+  .page-head { flex-direction: column; }
+  .tabs { width: 100%; justify-content: center; }
+  .tab { flex: 1; }
+}
+
+/* --------------------------- Accesibilidad ------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

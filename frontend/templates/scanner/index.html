@@ -1,50 +1,208 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}Inicio &middot; {{ app_name }}{% endblock %}
+{% block title %}Escanear documento &middot; {{ app_name }}{% endblock %}
 
 {% block content %}
-<section class="hero">
-  <p class="hero__eyebrow">Taller 4 &middot; Python + ML + FastAPI</p>
-  <h1 class="hero__title">Lector e Inspector de Documentos de Identificacion</h1>
-  <p class="hero__lead">
-    Toma una fotografia del documento con la camara, y el sistema extrae
-    automaticamente el numero de documento, el nombre del titular y valida la
-    presencia del rostro. Adios a la digitacion manual y a los errores de
-    captura en recepcion.
-  </p>
-  <div class="hero__actions">
-    <a class="btn btn--primary" href="#escaner">Comenzar a escanear</a>
-    <a class="btn btn--ghost" href="{{ fastapi_base_url }}/docs" target="_blank" rel="noopener">Documentacion de la API</a>
+<div
+  id="scanner-root"
+  data-scan-url="{% url 'scanner:scan' %}"
+  data-max-upload-mb="{{ max_upload_mb }}"
+  data-fastapi-url="{{ fastapi_base_url }}"
+>
+  <div class="page-head">
+    <div>
+      <h1 class="page-head__title">Escanear documento</h1>
+      <p class="page-head__lead">
+        Encuadra el documento dentro de las guias y pulsa el boton de captura.
+        El sistema extrae el numero, el nombre del titular y comprueba la foto y la MRZ.
+      </p>
+    </div>
+    <a class="btn btn--ghost btn--sm" href="{{ fastapi_base_url }}/docs" target="_blank" rel="noopener">
+      Ver API
+    </a>
   </div>
-</section>
 
-<section class="grid grid--3">
-  <article class="card">
-    <span class="card__icon" aria-hidden="true">📷</span>
-    <h2 class="card__title">Captura con la camara</h2>
-    <p class="card__text">
-      Acceso directo al stream de video del dispositivo mediante
-      <code>getUserMedia</code>, con guias visuales de encuadre y recorte
-      automatico del documento.
-    </p>
-  </article>
+  <div class="grid grid--2">
+    <!-- ======================= Panel de captura ======================= -->
+    <section class="panel-dark">
+      <div class="tabs" role="tablist" aria-label="Origen de la imagen">
+        <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="camera">
+          Camara
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="upload">
+          Subir archivo
+        </button>
+      </div>
 
-  <article class="card">
-    <span class="card__icon" aria-hidden="true">🧠</span>
-    <h2 class="card__title">OCR con IA</h2>
-    <p class="card__text">
-      Modelo preentrenado <strong>EasyOCR</strong> sobre <strong>OpenCV</strong>
-      para detectar las zonas de texto y localizar el rostro del documento.
-    </p>
-  </article>
+      <!-- ---------------------------- Camara --------------------------- -->
+      <div class="tab-panel" data-panel="camera">
+        <div class="camera-shell" id="camera-shell">
+          <video id="camera-video" playsinline muted autoplay></video>
+          <div class="camera-frame" aria-hidden="true"></div>
 
-  <article class="card">
-    <span class="card__icon" aria-hidden="true">✅</span>
-    <h2 class="card__title">Validacion MRZ</h2>
-    <p class="card__text">
-      Verificacion de consistencia de caracteres con los digitos de control del
-      estandar ICAO 9293 (modulo 10, pesos 7-3-1).
-    </p>
-  </article>
-</section>
+          <div class="camera-placeholder" id="camera-placeholder">
+            <div>
+              <span class="camera-placeholder__icon" aria-hidden="true">📷</span>
+              <strong>La camara esta apagada</strong>
+              <p style="margin:.4rem 0 0;font-size:.84rem">
+                Enciendela para tomar la foto del documento.
+              </p>
+            </div>
+          </div>
+
+          <div class="camera-status" id="camera-status" aria-live="polite">
+            <span class="camera-status__dot" aria-hidden="true"></span>
+            <span id="camera-status-text">Apagada</span>
+          </div>
+        </div>
+
+        <div class="camera-controls">
+          <button type="button" class="btn btn--light" id="btn-start">Encender camara</button>
+          <button
+            type="button"
+            class="shutter"
+            id="btn-capture"
+            disabled
+            title="Capturar documento"
+            aria-label="Capturar documento"
+          ></button>
+          <button type="button" class="btn btn--ghost btn--sm" id="btn-switch" hidden>Cambiar camara</button>
+          <button type="button" class="btn btn--ghost btn--sm" id="btn-stop" hidden>Apagar</button>
+        </div>
+
+        <select class="select mt-1 hidden" id="camera-select" aria-label="Seleccionar camara"></select>
+      </div>
+
+      <!-- --------------------------- Archivo --------------------------- -->
+      <div class="tab-panel hidden" data-panel="upload">
+        <label class="dropzone" id="dropzone" for="file-input">
+          <span class="dropzone__icon" aria-hidden="true">📁</span>
+          <strong>Selecciona o arrastra la foto del documento</strong>
+          <span class="field__hint">Formatos JPEG, PNG o WEBP &middot; maximo {{ max_upload_mb }} MB</span>
+        </label>
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" class="sr-only">
+        <p class="field__hint" id="file-name"></p>
+      </div>
+
+      <!-- --------------------------- Vista previa ---------------------- -->
+      <div class="preview-block hidden" id="preview-block">
+        <div class="row row--between">
+          <strong>Imagen lista para procesar</strong>
+          <span class="text-muted mono" id="preview-meta"></span>
+        </div>
+        <img class="capture-preview" id="preview-image" alt="Documento capturado">
+
+        <div class="progress hidden" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress__bar" id="progress-bar"></div>
+        </div>
+
+        <div class="row">
+          <button type="button" class="btn btn--primary" id="btn-process">Procesar documento</button>
+          <button type="button" class="btn btn--ghost btn--sm" id="btn-discard">Descartar</button>
+        </div>
+      </div>
+
+      <div class="alert alert--error hidden" id="capture-error" role="alert"></div>
+    </section>
+
+    <!-- ======================= Panel de resultados ==================== -->
+    <section class="stack" id="results-panel" aria-live="polite">
+      <div class="card card--center" id="results-empty">
+        <span class="card__icon" aria-hidden="true">🪪</span>
+        <h2 class="card__title">Sin resultados todavia</h2>
+        <p class="card__text">
+          Captura o sube una fotografia del documento y pulsa
+          <strong>Procesar documento</strong>.
+        </p>
+      </div>
+
+      <div class="panel-dark hidden" id="results-loading">
+        <div class="row">
+          <span class="spinner" aria-hidden="true"></span>
+          <strong>Analizando el documento&hellip;</strong>
+        </div>
+        <p class="card__text" style="margin:.6rem 0 0;font-size:.86rem">
+          Detectando el contorno, leyendo el texto con el modelo de OCR y validando la MRZ.
+        </p>
+      </div>
+
+      <div class="stack hidden" id="results-content">
+        <div class="panel-dark">
+          <div class="row row--between">
+            <h2 class="card__title" style="margin:0;font-size:1.05rem">Datos extraidos</h2>
+            <span id="result-status"></span>
+          </div>
+
+          <div class="field-list mt-1">
+            <div class="field-item">
+              <span class="field-item__label">Numero de documento</span>
+              <span class="field-item__value" id="result-number">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Nombre del titular</span>
+              <span class="field-item__value" id="result-name">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Tipo de documento</span>
+              <span class="field-item__value" id="result-type">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Fecha de nacimiento</span>
+              <span class="field-item__value" id="result-birth">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Caducidad</span>
+              <span class="field-item__value" id="result-expiry">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Nacionalidad</span>
+              <span class="field-item__value" id="result-nationality">&mdash;</span>
+            </div>
+          </div>
+
+          <div class="row mt-2">
+            <span class="badge badge--neutral" id="badge-photo">Foto</span>
+            <span class="badge badge--neutral" id="badge-mrz">MRZ</span>
+            <span class="badge badge--info" id="badge-engine">OCR</span>
+            <span class="badge badge--neutral" id="badge-confidence">Confianza</span>
+          </div>
+
+          <p class="card__text mt-2" id="result-message"></p>
+          <p class="field__hint mono" id="result-timing"></p>
+        </div>
+
+        <div class="card hidden" id="result-warnings-card">
+          <h3 class="card__title" style="font-size:.95rem">Advertencias</h3>
+          <ul class="warning-list" id="result-warnings"></ul>
+        </div>
+
+        <details class="card" id="result-mrz-card">
+          <summary class="card__title" style="font-size:.95rem;cursor:pointer">Detalle de la MRZ</summary>
+          <div class="table-wrap mt-2">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Digito de control</th>
+                  <th>Resultado</th>
+                </tr>
+              </thead>
+              <tbody id="mrz-checks"></tbody>
+            </table>
+          </div>
+          <pre class="mrz-lines mono" id="mrz-lines"></pre>
+        </details>
+
+        <details class="card">
+          <summary class="card__title" style="font-size:.95rem;cursor:pointer">Texto reconocido por el OCR</summary>
+          <pre class="ocr-text mono" id="result-text"></pre>
+        </details>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+  <script type="module" src="{% static 'js/scanner.js' %}"></script>
 {% endblock %}
