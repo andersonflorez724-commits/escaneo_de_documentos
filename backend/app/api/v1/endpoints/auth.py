@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.deps import CurrentUser, UserRepo
@@ -42,15 +42,44 @@ def _authenticate_or_401(repository: UserRepository, email: str, password: str) 
     return user
 
 
+REGISTER_EXAMPLES = {
+    "nuevo_usuario": {
+        "summary": "Registro tipico",
+        "value": {
+            "email": "ana@escaneo.com",
+            "full_name": "Ana Maria Gomez",
+            "password": "Segura123",
+        },
+    }
+}
+
+LOGIN_EXAMPLES = {
+    "usuario_semilla": {
+        "summary": "Cuenta de demostracion",
+        "value": {"email": "admin@escaneo.com", "password": "Admin123*"},
+    }
+}
+
+
 @router.post(
     "/register",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
     summary="Registrar un usuario",
-    description="Crea una cuenta nueva. El correo electronico es el identificador de acceso.",
-    responses={409: {"description": "El correo ya esta registrado."}},
+    description=(
+        "Crea una cuenta nueva. El correo electronico es el identificador de "
+        "acceso y la contrasena debe tener al menos 8 caracteres, con letras y "
+        "numeros."
+    ),
+    responses={
+        409: {"description": "El correo ya esta registrado."},
+        422: {"description": "Datos invalidos (correo mal formado o contrasena debil)."},
+    },
 )
-async def register(payload: UserCreate, repository: UserRepo) -> UserRead:
+async def register(
+    payload: Annotated[UserCreate, Body(openapi_examples=REGISTER_EXAMPLES)],
+    repository: UserRepo,
+) -> UserRead:
     try:
         user = repository.create(
             email=str(payload.email),
@@ -76,7 +105,10 @@ async def register(payload: UserCreate, repository: UserRepo) -> UserRead:
     ),
     responses={401: {"description": "Credenciales incorrectas."}},
 )
-async def login(payload: LoginRequest, repository: UserRepo) -> Token:
+async def login(
+    payload: Annotated[LoginRequest, Body(openapi_examples=LOGIN_EXAMPLES)],
+    repository: UserRepo,
+) -> Token:
     user = _authenticate_or_401(repository, str(payload.email), payload.password)
     return _issue_token(user)
 
