@@ -18,8 +18,14 @@ Pillow>=10.4
 numpy>=1.26
 
 # ------------------------------ Stack ML -----------------------------------
-# Deteccion de zonas de texto + rostro y OCR con modelo preentrenado
-opencv-python-headless>=4.10
+# Deteccion de zonas de texto + rostro y OCR con modelo preentrenado.
+#
+# OpenCV se fija a la rama 4.x a proposito: OpenCV 5 elimino
+# `cv2.CascadeClassifier` y dejo de empaquetar las cascadas de Haar, que son
+# las que usa la deteccion de rostro del documento. Con 4.x los archivos
+# `haarcascade_frontalface_*.xml` vienen incluidos y no hay que descargar
+# ningun modelo adicional.opencv-python-headless>=4.10,<5
+,<5
 torch>=2.4
 torchvision>=0.19
 easyocr>=1.7.1
