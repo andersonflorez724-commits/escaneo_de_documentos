@@ -24,17 +24,18 @@
       <nav class="nav" aria-label="Navegacion principal">
         {% if user.is_authenticated %}
           <a class="nav__link {% if active == 'scanner' %}is-active{% endif %}" href="{% url 'scanner:index' %}">Escanear</a>
-          <a class="nav__link {% if active == 'history' %}is-active{% endif %}" href="#">Historial</a>
-          <div class="nav__user">
+          <a class="nav__link {% if active == 'history' %}is-active{% endif %}" href="{% url 'scanner:history' %}">Historial</a>
+          <a class="nav__user" href="{% url 'accounts:profile' %}" title="Mi perfil">
             <span class="avatar" aria-hidden="true">{{ user.get_short_name|default:user.username|slice:":1"|upper }}</span>
             <span class="nav__username">{{ user.get_full_name|default:user.username }}</span>
-          </div>
-          <form class="inline-form" method="post" action="#">
+          </a>
+          <form class="inline-form" method="post" action="{% url 'accounts:logout' %}">
             {% csrf_token %}
             <button type="submit" class="btn btn--ghost btn--sm">Salir</button>
           </form>
         {% else %}
-          <a class="nav__link" href="#">Iniciar sesion</a>
+          <a class="nav__link" href="{% url 'accounts:login' %}">Iniciar sesion</a>
+          <a class="btn btn--primary btn--sm" href="{% url 'accounts:register' %}">Crear cuenta</a>
         {% endif %}
       </nav>
     </div>

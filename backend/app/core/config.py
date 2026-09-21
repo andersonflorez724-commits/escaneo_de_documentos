@@ -24,7 +24,7 @@ PROJECT_ROOT = BACKEND_DIR.parent
 DEFAULT_APP_NAME = "Lector e Inspector de Documentos"
 DEFAULT_APP_VERSION = "1.0.0"
 DEFAULT_SECRET_KEY = "dev-secret-key-cambiar-en-produccion"
-DEFAULT_SEED_EMAIL = "admin@escaneo.local"
+DEFAULT_SEED_EMAIL = "admin@escaneo.com"
 DEFAULT_SEED_PASSWORD = "Admin123*"
 DEFAULT_SEED_NAME = "Administrador"
 

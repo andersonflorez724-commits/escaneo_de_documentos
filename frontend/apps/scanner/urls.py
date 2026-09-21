@@ -8,4 +8,5 @@ app_name = "scanner"
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("historial/", views.history, name="history"),
 ]

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.services.users import get_user_repository
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    # Usuario semilla para poder probar el flujo completo sin base de datos.
+    seed_user = get_user_repository().ensure_seed_user()
+    logger.info("Usuario semilla disponible: %s", seed_user.email)
     logger.info("FastAPI listo: %s v%s", settings.app_name, settings.app_version)
     return app
 

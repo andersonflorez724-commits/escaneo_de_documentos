@@ -1,9 +1,14 @@
-"""URLs de la app de cuentas (se completan en el modulo de autenticacion)."""
+"""URLs de la app de cuentas."""
 
-from django.urls import URLPattern, path
+from django.urls import path
+
+from apps.accounts import views
 
 app_name = "accounts"
 
-urlpatterns: list[URLPattern] = []
-
-__all__ = ["app_name", "urlpatterns", "path"]
+urlpatterns = [
+    path("ingresar/", views.AppLoginView.as_view(), name="login"),
+    path("salir/", views.logout_view, name="logout"),
+    path("registro/", views.register_view, name="register"),
+    path("perfil/", views.profile_view, name="profile"),
+]

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Historial &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="stack">
+  <div class="row row--between">
+    <div>
+      <h1 class="card__title" style="margin:0">Historial de escaneos</h1>
+      <p class="text-muted" style="margin:.3rem 0 0;font-size:.9rem">
+        Documentos procesados durante la sesion actual.
+      </p>
+    </div>
+    <a class="btn btn--primary btn--sm" href="{% url 'scanner:index' %}">Escanear otro</a>
+  </div>
+
+  {% if scans %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Documento</th>
+            <th>Nombre</th>
+            <th>Tipo</th>
+            <th>Foto</th>
+            <th>MRZ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for scan in scans %}
+            <tr>
+              <td class="mono">{{ scan.scanned_at }}</td>
+              <td class="mono">{{ scan.document_number|default:"—" }}</td>
+              <td>{{ scan.name|default:"—" }}</td>
+              <td>{{ scan.document_type|default:"—" }}</td>
+              <td>
+                {% if scan.valid_photo %}
+                  <span class="badge badge--ok">Valida</span>
+                {% else %}
+                  <span class="badge badge--bad">No valida</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if scan.mrz_valid %}
+                  <span class="badge badge--ok">Consistente</span>
+                {% elif scan.mrz_present %}
+                  <span class="badge badge--warn">Inconsistente</span>
+                {% else %}
+                  <span class="badge badge--neutral">Sin MRZ</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="card card--center">
+      <p class="card__text">Todavia no has escaneado ningun documento en esta sesion.</p>
+      <a class="btn btn--primary mt-2" href="{% url 'scanner:index' %}">Escanear el primero</a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
