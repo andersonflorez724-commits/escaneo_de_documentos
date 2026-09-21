@@ -1,0 +1,25 @@
+# ===========================================================================
+#  Backend FastAPI - dependencias completas (entorno local / Docker)
+#  Incluye el stack de Machine Learning (EasyOCR + OpenCV + PyTorch).
+# ===========================================================================
+
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.9
+python-multipart>=0.0.12
+
+# Seguridad / autenticacion JWT
+python-jose[cryptography]>=3.3
+passlib>=1.7
+
+# Utilidades
+python-dotenv>=1.0
+Pillow>=10.4
+numpy>=1.26
+
+# ------------------------------ Stack ML -----------------------------------
+# Deteccion de zonas de texto + rostro y OCR con modelo preentrenado
+opencv-python-headless>=4.10
+torch>=2.4
+torchvision>=0.19
+easyocr>=1.7.1

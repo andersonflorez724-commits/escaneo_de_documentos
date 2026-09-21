@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Inicio &middot; {{ app_name }}{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <p class="hero__eyebrow">Taller 4 &middot; Python + ML + FastAPI</p>
+  <h1 class="hero__title">Lector e Inspector de Documentos de Identificacion</h1>
+  <p class="hero__lead">
+    Toma una fotografia del documento con la camara, y el sistema extrae
+    automaticamente el numero de documento, el nombre del titular y valida la
+    presencia del rostro. Adios a la digitacion manual y a los errores de
+    captura en recepcion.
+  </p>
+  <div class="hero__actions">
+    <a class="btn btn--primary" href="#">Comenzar a escanear</a>
+    <a class="btn btn--ghost" href="/docs" target="_blank" rel="noopener">Documentacion de la API</a>
+  </div>
+</section>
+
+<section class="grid grid--3">
+  <article class="card">
+    <span class="card__icon" aria-hidden="true">📷</span>
+    <h2 class="card__title">Captura con la camara</h2>
+    <p class="card__text">
+      Acceso directo al stream de video del dispositivo mediante
+      <code>getUserMedia</code>, con guias visuales de encuadre y recorte
+      automatico del documento.
+    </p>
+  </article>
+
+  <article class="card">
+    <span class="card__icon" aria-hidden="true">🧠</span>
+    <h2 class="card__title">OCR con IA</h2>
+    <p class="card__text">
+      Modelo preentrenado <strong>EasyOCR</strong> sobre <strong>OpenCV</strong>
+      para detectar las zonas de texto y localizar el rostro del documento.
+    </p>
+  </article>
+
+  <article class="card">
+    <span class="card__icon" aria-hidden="true">✅</span>
+    <h2 class="card__title">Validacion MRZ</h2>
+    <p class="card__text">
+      Verificacion de consistencia de caracteres con los digitos de control del
+      estandar ICAO 9293 (modulo 10, pesos 7-3-1).
+    </p>
+  </article>
+</section>
+{% endblock %}

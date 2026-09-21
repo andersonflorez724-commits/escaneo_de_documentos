@@ -1,0 +1,1 @@
+"""Aplicaciones Django del frontend."""
