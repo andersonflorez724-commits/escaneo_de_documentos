@@ -275,6 +275,8 @@ ScannerUI.prototype.process = async function process() {
   try {
     const formData = new FormData();
     formData.append('file', this.pendingFile, this.pendingFile.name || 'documento.jpg');
+    // Se pide la vista previa del documento ya recortado y enderezado.
+    formData.append('include_preview', 'true');
 
     const response = await fetch(this.scanUrl, {
       method: 'POST',
@@ -352,6 +354,11 @@ ScannerUI.prototype.renderResult = function renderResult(data) {
   document.getElementById('result-message').textContent = data.message ?? '';
   document.getElementById('result-timing').textContent =
     `${Math.round(data.processing_ms ?? 0)} ms \u00b7 ${mrz.format ?? 'sin formato MRZ'}`;
+
+  if (data.preview_base64) {
+    this.el.previewImage.src = `data:image/jpeg;base64,${data.preview_base64}`;
+    this.el.previewMeta.textContent = 'recortado y enderezado';
+  }
 
   this.renderWarnings(data.warnings ?? []);
   this.renderMrz(mrz);

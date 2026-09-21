@@ -10,4 +10,5 @@ urlpatterns = [
     path("", views.index, name="index"),
     path("historial/", views.history, name="history"),
     path("api/escanear/", views.scan_proxy, name="scan"),
+    path("api/validar-mrz/", views.validate_mrz_proxy, name="validate-mrz"),
 ]

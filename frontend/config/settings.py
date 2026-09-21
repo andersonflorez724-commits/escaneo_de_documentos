@@ -161,6 +161,14 @@ FASTAPI_SERVICE_PASSWORD = os.getenv("FASTAPI_SERVICE_PASSWORD", "")
 # Tope de subida aceptado por el navegador (debe coincidir con MAX_UPLOAD_MB)
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "8"))
 
+# Limites de subida de Django. El cuerpo de la peticion debe admitir la imagen
+# completa (con un margen para el resto de campos del formulario); a partir de
+# FILE_UPLOAD_MAX_MEMORY_SIZE Django guarda el archivo en disco en lugar de
+# mantenerlo en memoria.
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_MB * 1024 * 1024 + 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
+FILE_UPLOAD_MAX_NUMBER_FILES = 5
+
 # ---------------------------------------------------------------------------
 # Cookies
 # ---------------------------------------------------------------------------
