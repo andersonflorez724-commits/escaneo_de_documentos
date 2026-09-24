@@ -1,0 +1,33 @@
+# Artefactos locales que no deben subirse al despliegue.
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secretos locales (las credenciales van en variables de Vercel).
+.env
+.env.*
+!.env.example
+db.sqlite3
+*.log
+
+# Modelos y cache de ML descargados por EasyOCR.
+.models/
+.model_cache/
+.easyocr/
+cache/
+
+# Salida de collectstatic local (no confundir con public/static, que si se sube).
+/staticfiles/
+
+# Documentacion y configuracion de desarrollo.
+.git/
+.gitignore
+.vscode/
+.idea/
+notebooks/
+tests-js/

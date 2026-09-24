@@ -1,0 +1,41 @@
+# ===========================================================================
+#  Dependencias para el desarrollo local (backend + frontend + pruebas).
+#
+#      python -m venv .venv
+#      .venv/Scripts/activate        # Linux/macOS: source .venv/bin/activate
+#      pip install -r requirements-dev.txt
+#
+#  El despliegue NO usa este archivo: cada funcion serverless declara las
+#  suyas en `backend/api/requirements.txt` y `frontend/api/requirements.txt`.
+# ===========================================================================
+
+# ------------------------------- Backend -----------------------------------
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic>=2.9
+python-multipart>=0.0.12
+python-dotenv>=1.0
+Pillow>=10.4
+numpy>=1.26
+
+# ------------------------------- Frontend ----------------------------------
+Django>=5.0
+requests>=2.31
+
+# ------------------------------ Stack de ML --------------------------------
+# OpenCV 4.x: la version 5 elimino CascadeClassifier y las cascadas de Haar.
+opencv-python-headless>=4.10,<5
+
+# Motor de OCR recomendado (ONNX, ~300 MB RAM, sin torch).
+rapidocr>=1.2
+onnxruntime>=1.18
+
+# EasyOCR opcional (mas preciso en algunos casos; ~2 GB con torch).
+torch>=2.4
+torchvision>=0.19
+easyocr>=1.7.1
+
+# -------------------------------- Pruebas ----------------------------------
+pytest>=8.0
+pytest-cov>=6.0
+httpx>=0.27

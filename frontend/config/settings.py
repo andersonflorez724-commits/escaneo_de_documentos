@@ -2,6 +2,9 @@
 
 Los valores se leen de `.env` en la raiz del repositorio cuando existe, de
 modo que el mismo codigo sirve para local y para el despliegue en Vercel.
+
+No hay base de datos, sesiones ni historial: la app solo renderiza la pagina
+y hace de proxy hacia FastAPI.
 """
 
 from __future__ import annotations
@@ -39,40 +42,43 @@ ON_VERCEL = bool(os.getenv("VERCEL"))
 # ---------------------------------------------------------------------------
 # Seguridad
 # ---------------------------------------------------------------------------
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-solo-para-desarrollo")
-DEBUG = env_bool("DJANGO_DEBUG", True)
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or os.getenv("SECRET_KEY", "django-insecure-solo-para-desarrollo")
+DEBUG = env_bool("DJANGO_DEBUG", not ON_VERCEL)
 
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", ["localhost", "127.0.0.1"])
 if ON_VERCEL and ".vercel.app" not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append(".vercel.app")
 
+# `VERCEL_URL` no incluye el esquema (por ejemplo `mi-app.vercel.app`).
+_vercel_url = os.getenv("VERCEL_URL")
+if _vercel_url and _vercel_url not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_vercel_url)
+
 CSRF_TRUSTED_ORIGINS = env_list(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
     ["http://localhost:8000", "http://127.0.0.1:8000", "https://*.vercel.app"],
 )
+if _vercel_url:
+    CSRF_TRUSTED_ORIGINS.append(f"https://{_vercel_url}")
+
+# Vercel termina el TLS en su borde y reenvia la peticion por HTTP.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
 
 # ---------------------------------------------------------------------------
-# Aplicaciones
+# Aplicaciones  (sin auth, sesiones ni mensajes: no hay base de datos)
 # ---------------------------------------------------------------------------
 INSTALLED_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
     "django.contrib.staticfiles",
     # Apps del proyecto
-    "apps.accounts",
     "apps.scanner",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -86,8 +92,6 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
                 "apps.scanner.context_processors.api_config",
             ],
         },
@@ -98,33 +102,10 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 # ---------------------------------------------------------------------------
-# Base de datos
+# Base de datos: no se usa. Django no necesita ENGINE ni NAME porque ninguna
+# app del proyecto define modelos ni contribuye tablas.
 # ---------------------------------------------------------------------------
-# Vercel monta el sistema de archivos como solo lectura salvo /tmp.
-_db_path = os.getenv("DJANGO_DB_PATH") or (
-    "/tmp/db.sqlite3" if ON_VERCEL else str(BASE_DIR / "db.sqlite3")
-)
-
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": _db_path,
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Autenticacion (sesiones de Django)
-# ---------------------------------------------------------------------------
-AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
-    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
-    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
-]
-
-LOGIN_URL = "accounts:login"
-LOGIN_REDIRECT_URL = "scanner:index"
-LOGOUT_REDIRECT_URL = "accounts:login"
+DATABASES = {}
 
 # ---------------------------------------------------------------------------
 # Internacionalizacion
@@ -138,8 +119,21 @@ USE_TZ = True
 # Archivos estaticos
 # ---------------------------------------------------------------------------
 STATIC_URL = "/static/"
-STATICFILES_DIRS = [BASE_DIR / "static"]
-STATIC_ROOT = BASE_DIR / "staticfiles"
+
+_static_dirs = [BASE_DIR / "static"]
+STATICFILES_DIRS = [d for d in _static_dirs if d.exists()]
+
+# En Vercel los archivos recolectados se publican desde `public/`, que el CDN
+# sirve directamente en la raiz del dominio. Asi `/static/css/styles.css` se
+# resuelve sin llegar a la funcion serverless. El collectstatic debe correrse
+# con VERCEL=1 (o DJANGO_STATIC_ROOT) para que quede en `public/static/`.
+if os.getenv("DJANGO_STATIC_ROOT"):
+    STATIC_ROOT = Path(os.environ["DJANGO_STATIC_ROOT"])
+elif ON_VERCEL:
+    STATIC_ROOT = PROJECT_ROOT / "public" / "static"
+else:
+    STATIC_ROOT = BASE_DIR / "staticfiles"
+
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
@@ -153,13 +147,20 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ---------------------------------------------------------------------------
 # Integracion con el backend FastAPI
 # ---------------------------------------------------------------------------
-FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
+# Vacio = mismo origen (despliegue Vercel: Django y FastAPI comparten dominio).
+# En local se define FASTAPI_BASE_URL en `.env` (por ejemplo http://127.0.0.1:8001).
+if ON_VERCEL:
+    FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "").rstrip("/")
+else:
+    FASTAPI_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
 FASTAPI_TIMEOUT = float(os.getenv("FASTAPI_TIMEOUT", "45"))
-FASTAPI_SERVICE_EMAIL = os.getenv("FASTAPI_SERVICE_EMAIL", "")
-FASTAPI_SERVICE_PASSWORD = os.getenv("FASTAPI_SERVICE_PASSWORD", "")
 
-# Tope de subida aceptado por el navegador (debe coincidir con MAX_UPLOAD_MB)
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "8"))
+# Tope de subida aceptado por el navegador (debe coincidir con MAX_UPLOAD_MB).
+# En Vercel el limite de cuerpo es ~4.5 MB, por eso el maximo es 4.
+if ON_VERCEL:
+    MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "4"))
+else:
+    MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "8"))
 
 # Limites de subida de Django. El cuerpo de la peticion debe admitir la imagen
 # completa (con un margen para el resto de campos del formulario); a partir de
@@ -172,14 +173,9 @@ FILE_UPLOAD_MAX_NUMBER_FILES = 5
 # ---------------------------------------------------------------------------
 # Cookies
 # ---------------------------------------------------------------------------
-SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES", not DEBUG)
 CSRF_COOKIE_SECURE = env_bool("DJANGO_SECURE_COOKIES", not DEBUG)
 X_FRAME_OPTIONS = "SAMEORIGIN"
-
-MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 
 LOGGING = {
     "version": 1,

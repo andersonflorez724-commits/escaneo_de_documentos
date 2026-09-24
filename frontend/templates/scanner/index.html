@@ -14,8 +14,10 @@
     <div>
       <h1 class="page-head__title">Escanear documento</h1>
       <p class="page-head__lead">
-        Encuadra el documento dentro de las guias y pulsa el boton de captura.
-        El sistema extrae el numero, el nombre del titular y comprueba la foto y la MRZ.
+        Sigue el orden en dos pasos: primero la <strong>cara frontal</strong>
+        (numero, apellidos, nombres y nacionalidad) y despues el
+        <strong>reverso</strong> (fecha de nacimiento y fecha de vencimiento).
+        La camara detecta el documento y captura solo cuando esta bien colocado.
       </p>
     </div>
     <a class="btn btn--ghost btn--sm" href="{{ fastapi_base_url }}/docs" target="_blank" rel="noopener">
@@ -26,6 +28,33 @@
   <div class="grid grid--2">
     <!-- ======================= Panel de captura ======================= -->
     <section class="panel-dark">
+      <!-- --------------------- Banner de paso actual ------------------ -->
+      <div class="step-banner" id="step-banner" data-step="1" role="status" aria-live="polite">
+        <strong>Paso 1 de 2</strong> · Toma primero la <strong>cara frontal</strong>
+        (numero, apellidos, nombres, nacionalidad).
+      </div>
+
+      <!-- ------------------------- Cara del documento ------------------- -->
+      <div class="sides" role="group" aria-label="Cara del documento que vas a capturar">
+        <button type="button" class="side-card is-active" data-side="front" aria-pressed="true">
+          <span class="side-card__step">Paso 1</span>
+          <span class="side-card__title">Cara frontal</span>
+          <span class="side-card__hint">Numero, apellidos, nombres, nacionalidad</span>
+          <span class="side-card__state" id="side-state-front" data-state="empty">Sin foto</span>
+        </button>
+        <button type="button" class="side-card" data-side="back" aria-pressed="false">
+          <span class="side-card__step">Paso 2</span>
+          <span class="side-card__title">Reverso</span>
+          <span class="side-card__hint">Fecha de nacimiento y fecha de vencimiento</span>
+          <span class="side-card__state" id="side-state-back" data-state="empty">Sin foto</span>
+        </button>
+      </div>
+
+      <p class="side-hint" id="side-hint">
+        <strong>Paso 1 · Cara frontal</strong>: toma primero el anverso &mdash;
+        numero de documento, apellidos, nombres y nacionalidad.
+      </p>
+
       <div class="tabs" role="tablist" aria-label="Origen de la imagen">
         <button type="button" class="tab is-active" role="tab" aria-selected="true" data-tab="camera">
           Camara
@@ -46,7 +75,7 @@
               <span class="camera-placeholder__icon" aria-hidden="true">📷</span>
               <strong>La camara esta apagada</strong>
               <p style="margin:.4rem 0 0;font-size:.84rem">
-                Enciendela para tomar la foto del documento.
+                Enciendela y coloca el documento: se capturara solo cuando este bien puesto.
               </p>
             </div>
           </div>
@@ -55,9 +84,25 @@
             <span class="camera-status__dot" aria-hidden="true"></span>
             <span id="camera-status-text">Apagada</span>
           </div>
+
+          <div class="detect-overlay hidden" id="detect-overlay" data-state="idle" role="status" aria-live="polite">
+            <span class="detect-overlay__dot" aria-hidden="true"></span>
+            <span id="detect-text">Buscando el documento…</span>
+            <div class="detect-overlay__progress" aria-hidden="true">
+              <div class="detect-overlay__bar" id="detect-bar"></div>
+            </div>
+          </div>
         </div>
 
-        <p class="field__hint">Atajos: <kbd>Espacio</kbd> para capturar, <kbd>Esc</kbd> para descartar.</p>
+        <div class="row row--between mt-1">
+          <p class="field__hint" style="margin:0">
+            Atajos: <kbd>Espacio</kbd> capturar, <kbd>Esc</kbd> descartar.
+          </p>
+          <label class="auto-toggle" title="Captura sola cuando el documento este bien colocado">
+            <input type="checkbox" id="toggle-auto" checked>
+            <span>Captura automatica</span>
+          </label>
+        </div>
 
         <div class="camera-controls">
           <button type="button" class="btn btn--light" id="btn-start">Encender camara</button>
@@ -80,20 +125,56 @@
       <div class="tab-panel hidden" data-panel="upload">
         <label class="dropzone" id="dropzone" for="file-input">
           <span class="dropzone__icon" aria-hidden="true">📁</span>
-          <strong>Selecciona o arrastra la foto del documento</strong>
-          <span class="field__hint">Formatos JPEG, PNG o WEBP &middot; maximo {{ max_upload_mb }} MB</span>
+          <strong id="dropzone-label">Selecciona o arrastra la foto de la cara frontal</strong>
+          <span class="field__hint">Puedes soltar frontal y reverso a la vez · JPEG, PNG o WEBP · maximo {{ max_upload_mb }} MB</span>
         </label>
-        <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" class="sr-only">
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple class="sr-only">
         <p class="field__hint" id="file-name"></p>
       </div>
 
       <!-- --------------------------- Vista previa ---------------------- -->
       <div class="preview-block hidden" id="preview-block">
         <div class="row row--between">
-          <strong>Imagen lista para procesar</strong>
+          <strong>Imagenes listas para procesar</strong>
           <span class="text-muted mono" id="preview-meta"></span>
         </div>
-        <img class="capture-preview" id="preview-image" alt="Documento capturado">
+
+        <div class="preview-grid">
+          <figure class="preview-item is-empty" id="preview-item-front" data-side="front">
+            <div class="preview-item__placeholder" aria-hidden="true">1 · Falta la frontal</div>
+            <img id="preview-front" alt="Aun sin capturar la cara frontal" hidden>
+            <figcaption>
+              <span>1 · Cara frontal</span>
+              <button
+                type="button"
+                class="preview-item__remove"
+                data-remove-side="front"
+                title="Quitar la cara frontal"
+                hidden
+              >Quitar</button>
+            </figcaption>
+          </figure>
+
+          <figure class="preview-item is-empty" id="preview-item-back" data-side="back">
+            <div class="preview-item__placeholder" aria-hidden="true">2 · Falta el reverso</div>
+            <img id="preview-back" alt="Aun sin capturar el reverso" hidden>
+            <figcaption>
+              <span>2 · Reverso</span>
+              <button
+                type="button"
+                class="preview-item__remove"
+                data-remove-side="back"
+                title="Quitar el reverso"
+                hidden
+              >Quitar</button>
+            </figcaption>
+          </figure>
+        </div>
+
+        <div class="captures-block hidden" id="captures-block">
+          <strong class="captures-block__title">Capturas tomadas</strong>
+          <div class="captures-track" id="captures-track"></div>
+        </div>
 
         <div class="progress hidden" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
           <div class="progress__bar" id="progress-bar"></div>
@@ -101,7 +182,7 @@
 
         <div class="row">
           <button type="button" class="btn btn--primary" id="btn-process">Procesar documento</button>
-          <button type="button" class="btn btn--ghost btn--sm" id="btn-discard">Descartar</button>
+          <button type="button" class="btn btn--ghost btn--sm" id="btn-discard">Descartar todo</button>
         </div>
       </div>
 
@@ -114,8 +195,9 @@
         <span class="card__icon" aria-hidden="true">🪪</span>
         <h2 class="card__title">Sin resultados todavia</h2>
         <p class="card__text">
-          Captura o sube una fotografia del documento y pulsa
-          <strong>Procesar documento</strong>.
+          Captura la <strong>cara frontal</strong> (numero, apellidos, nombres,
+          nacionalidad) y luego el <strong>reverso</strong> (fecha de nacimiento
+          y vencimiento) y pulsa <strong>Procesar documento</strong>.
         </p>
       </div>
 
@@ -125,7 +207,8 @@
           <strong>Analizando el documento&hellip;</strong>
         </div>
         <p class="card__text" style="margin:.6rem 0 0;font-size:.86rem">
-          Detectando el contorno, leyendo el texto con el modelo de OCR y validando la MRZ.
+          Detectando el contorno de cada cara, leyendo el texto con el modelo de OCR
+          y validando la MRZ o el codigo de verificacion.
         </p>
       </div>
 
@@ -142,33 +225,66 @@
           </div>
 
           <div class="field-list mt-1">
-            <div class="field-item">
+            <div class="field-item field-item--priority">
               <span class="field-item__label">Numero de documento</span>
               <span class="field-item__value" id="result-number">&mdash;</span>
             </div>
+            <div class="field-item field-item--priority">
+              <span class="field-item__label">Apellidos</span>
+              <span class="field-item__value" id="result-first-surname">&mdash;</span>
+            </div>
+            <div class="field-item field-item--priority">
+              <span class="field-item__label">Nombres</span>
+              <span class="field-item__value" id="result-given-names">&mdash;</span>
+            </div>
+            <div class="field-item field-item--priority">
+              <span class="field-item__label">Nacionalidad</span>
+              <span class="field-item__value" id="result-nationality">&mdash;</span>
+            </div>
+            <div class="field-item field-item--priority">
+              <span class="field-item__label">Fecha de nacimiento</span>
+              <span class="field-item__value" id="result-birth">&mdash;</span>
+            </div>
+            <div class="field-item field-item--priority">
+              <span class="field-item__label">Fecha de vencimiento (caducidad)</span>
+              <span class="field-item__value" id="result-expiry">&mdash;</span>
+            </div>
             <div class="field-item">
-              <span class="field-item__label">Nombre del titular</span>
+              <span class="field-item__label">Nombres y apellidos</span>
               <span class="field-item__value" id="result-name">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Segundo apellido</span>
+              <span class="field-item__value" id="result-second-surname">&mdash;</span>
             </div>
             <div class="field-item">
               <span class="field-item__label">Tipo de documento</span>
               <span class="field-item__value" id="result-type">&mdash;</span>
             </div>
             <div class="field-item">
-              <span class="field-item__label">Fecha de nacimiento</span>
-              <span class="field-item__value" id="result-birth">&mdash;</span>
+              <span class="field-item__label">Lugar de nacimiento</span>
+              <span class="field-item__value" id="result-birth-place">&mdash;</span>
             </div>
             <div class="field-item">
-              <span class="field-item__label">Caducidad</span>
-              <span class="field-item__value" id="result-expiry">&mdash;</span>
+              <span class="field-item__label">Fecha de expedicion</span>
+              <span class="field-item__value" id="result-issue-date">&mdash;</span>
             </div>
             <div class="field-item">
-              <span class="field-item__label">Nacionalidad</span>
-              <span class="field-item__value" id="result-nationality">&mdash;</span>
+              <span class="field-item__label">Lugar de expedicion</span>
+              <span class="field-item__value" id="result-issue-place">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Sexo</span>
+              <span class="field-item__value" id="result-sex">&mdash;</span>
+            </div>
+            <div class="field-item">
+              <span class="field-item__label">Grupo sanguineo</span>
+              <span class="field-item__value" id="result-blood">&mdash;</span>
             </div>
           </div>
 
           <div class="row mt-2">
+            <span class="badge badge--neutral" id="badge-sides">Caras</span>
             <span class="badge badge--neutral" id="badge-photo">Foto</span>
             <span class="badge badge--neutral" id="badge-mrz">MRZ</span>
             <span class="badge badge--info" id="badge-engine">OCR</span>

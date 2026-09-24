@@ -10,8 +10,10 @@ from app.services.mrz import (
     compute_check_digit,
     detect_format,
     find_mrz_lines,
+    is_verification_code_line,
     normalize_line,
     parse_mrz,
+    parse_verification_code,
     repair_line,
     verify_check_digit,
 )
@@ -203,6 +205,39 @@ class TestInconsistency:
 
 
 class TestFindMrzLines:
+    def test_ignores_the_colombian_verification_code(self) -> None:
+        # La Tarjeta de Identidad y la Cedula no llevan MRZ: el reverso trae un
+        # codigo de verificacion que no debe leerse como TD2.
+        code = "P-0100150-00799122-M-1033186199-20160309 0048866905A 45514466"
+
+        assert find_mrz_lines([code]) == []
+        assert parse_mrz([code]).detected is False
+
+    def test_ignores_a_long_line_without_structure(self) -> None:
+        # Un renglon normal del documento, normalizado, parece una MRZ por su
+        # longitud y su falta de rellenos: la estructura lo delata.
+        line = "FECHA DE VENCIMIENTO 20-SEP-2026 G S RH SEXO"
+
+        assert normalize_line(line)
+        assert find_mrz_lines([line]) == []
+
+    def test_reads_the_colombian_verification_code(self) -> None:
+        code = "P-0100150-00799122-M-1033186199-20160309 0048866905A 45514466"
+
+        assert is_verification_code_line(code) is True
+        parsed = parse_verification_code(code)
+        assert parsed is not None
+        assert parsed["sex"] == "M"
+        assert parsed["number"] == "1033186199"
+        assert parsed["date"] == "20160309"
+
+    def test_a_plain_line_is_not_a_verification_code(self) -> None:
+        assert is_verification_code_line("JUAN PEREZ") is False
+        assert parse_verification_code("JUAN PEREZ") is None
+
+    def test_does_not_guess_td1_from_a_single_short_line(self) -> None:
+        assert detect_format(["P<COLPEREZ<<JUAN<<<<<<<<<<<<<<<<"]) is None
+
     def test_extracts_from_noisy_ocr_text(self) -> None:
         text = [
             "REPUBLICA DE COLOMBIA",

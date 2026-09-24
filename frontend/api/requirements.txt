@@ -1,0 +1,11 @@
+# ===========================================================================
+#  Dependencias de la funcion serverless de Vercel para el cliente Django.
+#  Vercel busca este archivo en la misma carpeta que el punto de entrada
+#  (`frontend/api/index.py`).
+#
+#  Sin base de datos ni sesiones: no hace falta psycopg ni migrate.
+# ===========================================================================
+
+Django>=5.0
+requests>=2.31
+python-dotenv>=1.0

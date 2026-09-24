@@ -7,6 +7,16 @@
   <meta name="description" content="Lectura e inspeccion automatica de documentos de identificacion con OCR e IA.">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪪</text></svg>">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) { /* sin storage: tema claro por defecto */ }
+    })();
+  </script>
   <link rel="stylesheet" href="{% static 'css/styles.css' %}">
 </head>
 <body class="app">
@@ -22,32 +32,17 @@
       </a>
 
       <nav class="nav" aria-label="Navegacion principal">
-        {% if user.is_authenticated %}
-          <a class="nav__link {% if active == 'scanner' %}is-active{% endif %}" href="{% url 'scanner:index' %}">Escanear</a>
-          <a class="nav__link {% if active == 'history' %}is-active{% endif %}" href="{% url 'scanner:history' %}">Historial</a>
-          <a class="nav__user" href="{% url 'accounts:profile' %}" title="Mi perfil">
-            <span class="avatar" aria-hidden="true">{{ user.get_short_name|default:user.username|slice:":1"|upper }}</span>
-            <span class="nav__username">{{ user.get_full_name|default:user.username }}</span>
-          </a>
-          <form class="inline-form" method="post" action="{% url 'accounts:logout' %}">
-            {% csrf_token %}
-            <button type="submit" class="btn btn--ghost btn--sm">Salir</button>
-          </form>
-        {% else %}
-          <a class="nav__link" href="{% url 'accounts:login' %}">Iniciar sesion</a>
-          <a class="btn btn--primary btn--sm" href="{% url 'accounts:register' %}">Crear cuenta</a>
-        {% endif %}
+        <a class="nav__link {% if active == 'scanner' %}is-active{% endif %}" href="{% url 'scanner:index' %}">Escanear</a>
+        <button
+          type="button"
+          class="theme-toggle"
+          id="theme-toggle"
+          title="Cambiar claro / oscuro"
+          aria-label="Cambiar entre modo claro y oscuro"
+        ><span id="theme-toggle-icon" aria-hidden="true">🌙</span></button>
       </nav>
     </div>
   </header>
-
-  {% if messages %}
-    <div class="flash-stack" role="status" aria-live="polite">
-      {% for message in messages %}
-        <div class="flash flash--{{ message.tags|default:'info' }}">{{ message }}</div>
-      {% endfor %}
-    </div>
-  {% endif %}
 
   <main class="main">
     {% block content %}{% endblock %}
@@ -58,10 +53,32 @@
   <footer class="footer">
     <div class="footer__inner">
       <span>&copy; {% now "Y" %} {{ app_name }} &middot; v{{ app_version }}</span>
-      <span class="footer__stack">Django + FastAPI + EasyOCR</span>
+      <span class="footer__stack">Django + FastAPI + RapidOCR</span>
     </div>
   </footer>
 
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var btn = document.getElementById('theme-toggle');
+      var icon = document.getElementById('theme-toggle-icon');
+      function current() {
+        return root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+      }
+      function paint() {
+        if (icon) icon.textContent = current() === 'dark' ? '☀️' : '🌙';
+      }
+      paint();
+      if (btn) {
+        btn.addEventListener('click', function () {
+          var next = current() === 'dark' ? 'light' : 'dark';
+          root.setAttribute('data-theme', next);
+          try { localStorage.setItem('theme', next); } catch (e) { /* ok */ }
+          paint();
+        });
+      }
+    })();
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

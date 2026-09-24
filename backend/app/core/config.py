@@ -23,24 +23,18 @@ PROJECT_ROOT = BACKEND_DIR.parent
 # devuelve el descriptor del slot y no el valor.
 DEFAULT_APP_NAME = "Lector e Inspector de Documentos"
 DEFAULT_APP_VERSION = "1.0.0"
-DEFAULT_SECRET_KEY = "dev-secret-key-cambiar-en-produccion"
-DEFAULT_SEED_EMAIL = "admin@escaneo.com"
-DEFAULT_SEED_PASSWORD = "Admin123*"
-DEFAULT_SEED_NAME = "Administrador"
 
 DESCRIPTION = """
 API de **lectura e inspeccion de documentos de identificacion**.
 
-Combina un modelo preentrenado de *EasyOCR* con *OpenCV* para detectar las
-zonas de texto y el rostro del documento, extraer los campos relevantes y
-validar la consistencia de la **MRZ** (Machine Readable Zone) segun el
-estandar ICAO 9293 (digitos de control modulo 10, pesos 7-3-1).
+Combina un modelo preentrenado de OCR (*RapidOCR* / *EasyOCR*) con *OpenCV*
+para detectar las zonas de texto y el rostro del documento, extraer los campos
+relevantes y validar la consistencia de la **MRZ** (Machine Readable Zone)
+segun el estandar ICAO 9293 (digitos de control modulo 10, pesos 7-3-1).
 
 ### Flujo tipico
-1. `POST /api/v1/auth/login` &rarr; obtiene el token JWT.
-2. Autoriza con el boton **Authorize** (`Bearer <token>`).
-3. `POST /api/v1/scan-document` con la foto del documento.
-4. `POST /api/v1/validate-mrz` para la verificacion de consistencia.
+1. `POST /api/v1/scan-document` con la foto del documento.
+2. `POST /api/v1/validate-mrz` para la verificacion de consistencia.
 """
 
 
@@ -89,24 +83,23 @@ class Settings:
     api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
 
-    # --------------------------- Autenticacion -----------------------------
-    secret_key: str = DEFAULT_SECRET_KEY
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 120
-    seed_user_email: str = DEFAULT_SEED_EMAIL
-    seed_user_password: str = DEFAULT_SEED_PASSWORD
-    seed_user_name: str = DEFAULT_SEED_NAME
-
     # -------------------------------- CORS ---------------------------------
     allowed_origins: tuple[str, ...] = ()
 
     # ------------------------- Motor OCR / ML ------------------------------
+    # auto | rapidocr | easyocr | heuristic
     ocr_engine: str = "auto"
     ocr_languages: tuple[str, ...] = ("es", "en")
     ocr_use_gpu: bool = False
-    ocr_min_confidence: float = 0.30
-    max_image_dimension: int = 1600
+    ocr_min_confidence: float = 0.20
+    max_image_dimension: int = 1280
     face_detector: str = "auto"
+
+    # Lienzo del detector de EasyOCR. 0 = ajustarlo al tamano real de la imagen.
+    # El valor por defecto de la libreria (2560) rellena la foto hasta un
+    # cuadrado de 2560x2560, que lo multiplica por mas de tres los pixeles que
+    # procesa el detector sin mejorar la lectura. RapidOCR no usa este parametro.
+    ocr_canvas_size: int = 0
 
     # Maximo de lineas de texto devueltas al cliente. El texto crudo del OCR
     # es util para depurar, pero infla la respuesta: se recorta.
@@ -131,19 +124,14 @@ def _build_settings() -> Settings:
         app_name=env.get("APP_NAME") or DEFAULT_APP_NAME,
         app_version=env.get("APP_VERSION") or DEFAULT_APP_VERSION,
         log_level=(env.get("LOG_LEVEL") or "INFO").upper(),
-        secret_key=env.get("SECRET_KEY") or env.get("DJANGO_SECRET_KEY") or DEFAULT_SECRET_KEY,
-        algorithm=env.get("JWT_ALGORITHM") or "HS256",
-        access_token_expire_minutes=_as_int(env.get("ACCESS_TOKEN_EXPIRE_MINUTES"), 120),
-        seed_user_email=env.get("SEED_USER_EMAIL") or DEFAULT_SEED_EMAIL,
-        seed_user_password=env.get("SEED_USER_PASSWORD") or DEFAULT_SEED_PASSWORD,
-        seed_user_name=env.get("SEED_USER_NAME") or DEFAULT_SEED_NAME,
         allowed_origins=_as_tuple(env.get("ALLOWED_ORIGINS")),
         ocr_engine=(env.get("OCR_ENGINE") or "auto").strip().lower(),
         ocr_languages=_as_tuple(env.get("OCR_LANGUAGES"), ("es", "en")),
         ocr_use_gpu=_as_bool(env.get("OCR_USE_GPU"), False),
-        ocr_min_confidence=_as_float(env.get("OCR_MIN_CONFIDENCE"), 0.30),
-        max_image_dimension=_as_int(env.get("MAX_IMAGE_DIMENSION"), 1600),
+        ocr_min_confidence=_as_float(env.get("OCR_MIN_CONFIDENCE"), 0.20),
+        max_image_dimension=_as_int(env.get("MAX_IMAGE_DIMENSION"), 1280),
         face_detector=(env.get("FACE_DETECTOR") or "auto").strip().lower(),
+        ocr_canvas_size=_as_int(env.get("OCR_CANVAS_SIZE"), 0),
         ocr_max_text_lines=_as_int(env.get("OCR_MAX_TEXT_LINES"), 80),
         enable_gzip=_as_bool(env.get("ENABLE_GZIP"), True),
         max_upload_mb=_as_int(env.get("MAX_UPLOAD_MB"), 8),

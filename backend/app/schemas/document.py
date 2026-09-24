@@ -112,17 +112,43 @@ class MRZValidationResponse(BaseModel):
     mrz: MRZInfo = Field(description="Detalle completo del analisis.")
 
 
+class SideInfoOut(BaseModel):
+    """Resumen del analisis de una de las caras del documento."""
+
+    side: str = Field(description="Etiqueta de la cara: `front`, `back`, ...", examples=["front"])
+    label: str = Field(description="Nombre legible de la cara.", examples=["cara frontal"])
+    ok: bool = Field(description="La imagen de esta cara se pudo procesar.", examples=[True])
+    width: int = Field(default=0, description="Ancho en pixeles tras el escalado.", examples=[1600])
+    height: int = Field(default=0, description="Alto en pixeles tras el escalado.", examples=[1000])
+    quality_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Calidad de esta cara.")
+    document_detected: bool = Field(default=False, description="Se detecto el contorno del documento.")
+    deskew_angle: float = Field(default=0.0, description="Angulo de inclinacion corregido, en grados.")
+    face_detected: bool = Field(default=False, description="Se encontro un rostro en esta cara.")
+    valid_photo: bool = Field(default=False, description="La foto del titular de esta cara es valida.")
+    used_mrz_passes: bool = Field(default=False, description="Necesito pasadas extra para la MRZ.")
+    processing_ms: float = Field(default=0.0, description="Tiempo de procesamiento de la cara, en milisegundos.")
+    error: str | None = Field(default=None, description="Motivo por el que la cara no se pudo procesar.")
+    preview_base64: str | None = Field(default=None, description="Vista previa JPEG en base64 de esta cara.")
+
+
 class DocumentFieldsOut(BaseModel):
     """Campos extraidos del documento y su origen."""
 
-    document_number: str | None = Field(default=None, examples=["L898902C3"])
-    name: str | None = Field(default=None, examples=["ANNA MARIA ERIKSSON"])
-    document_type: str | None = Field(default=None, examples=["PASAPORTE"])
-    birth_date: str | None = Field(default=None, examples=["1974-08-12"])
-    expiry_date: str | None = Field(default=None, examples=["2012-04-15"])
+    document_number: str | None = Field(default=None, examples=["1.033.186.199"])
+    name: str | None = Field(default=None, description="Nombres y apellidos del titular.", examples=["JUAN JOSE OCAMPO ARTEAGA"])
+    document_type: str | None = Field(default=None, examples=["TARJETA DE IDENTIDAD"])
+    first_surname: str | None = Field(default=None, description="Primer apellido.", examples=["OCAMPO"])
+    second_surname: str | None = Field(default=None, description="Segundo apellido.", examples=["ARTEAGA"])
+    given_names: str | None = Field(default=None, description="Nombres de pila.", examples=["JUAN JOSE"])
+    birth_date: str | None = Field(default=None, examples=["2004-04-15"])
+    birth_place: str | None = Field(default=None, description="Lugar de nacimiento.", examples=["MEDELLIN (ANTIOQUIA)"])
+    issue_date: str | None = Field(default=None, description="Fecha de expedicion.", examples=["2022-04-20"])
+    issue_place: str | None = Field(default=None, description="Lugar de expedicion.", examples=["CARTAGENA"])
+    expiry_date: str | None = Field(default=None, examples=["2032-04-19"])
     sex: str | None = Field(default=None, examples=["F"])
-    nationality: str | None = Field(default=None, examples=["UTO"])
-    issuing_country: str | None = Field(default=None, examples=["UTO"])
+    blood_type: str | None = Field(default=None, description="Grupo sanguineo con el factor RH.", examples=["O+"])
+    nationality: str | None = Field(default=None, examples=["COL"])
+    issuing_country: str | None = Field(default=None, examples=["COL"])
     confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Confianza de la extraccion.", examples=[0.91])
     sources: dict[str, str] = Field(
         default_factory=dict,
@@ -150,8 +176,20 @@ class DocumentScanResponse(BaseModel):
     face: FaceInfo = Field(description="Inspeccion del rostro.")
     quality: QualityInfo = Field(description="Calidad de la fotografia.")
 
+    # Analisis cara a cara: la frontal aporta el numero, el nombre y la foto; el
+    # reverso las fechas, el lugar de nacimiento y el grupo sanguineo.
+    sides: list[SideInfoOut] = Field(
+        default_factory=list,
+        description="Resumen del analisis de cada cara enviada (frontal, reverso, ...).",
+    )
+
     engine: str = Field(description="Motor de OCR utilizado.", examples=["easyocr"])
     processing_ms: float = Field(description="Tiempo total de procesamiento en milisegundos.", examples=[2480.5])
+    sides_processed: int = Field(default=0, description="Numero de caras analizadas correctamente.")
+    both_sides: bool = Field(
+        default=False,
+        description="Se analizaron la cara frontal y el reverso: la lectura es completa.",
+    )
     document_detected: bool = Field(default=False, description="Se detecto y recorto el contorno del documento.")
     deskew_angle: float = Field(default=0.0, description="Angulo de inclinacion corregido, en grados.")
     text_lines: list[str] = Field(default_factory=list, description="Texto crudo reconocido por el OCR.")
@@ -191,4 +229,5 @@ __all__ = [
     "MRZRequest",
     "MRZValidationResponse",
     "QualityInfo",
+    "SideInfoOut",
 ]

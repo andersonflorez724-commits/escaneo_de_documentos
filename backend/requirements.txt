@@ -1,16 +1,13 @@
 # ===========================================================================
-#  Backend FastAPI - dependencias completas (entorno local / Docker)
-#  Incluye el stack de Machine Learning (EasyOCR + OpenCV + PyTorch).
+#  Backend FastAPI - dependencias completas (entorno local / desarrollo)
+#  Incluye RapidOCR (recomendado), EasyOCR + PyTorch (opcional) y OpenCV.
+#  El contenedor de produccion usa requirements-rapidocr.txt (sin torch).
 # ===========================================================================
 
 fastapi>=0.115
 uvicorn[standard]>=0.34
-pydantic>=2.9
+pydantic[email]>=2.9
 python-multipart>=0.0.12
-
-# Seguridad / autenticacion JWT
-python-jose[cryptography]>=3.3
-passlib>=1.7
 
 # Utilidades
 python-dotenv>=1.0
@@ -24,8 +21,14 @@ numpy>=1.26
 # `cv2.CascadeClassifier` y dejo de empaquetar las cascadas de Haar, que son
 # las que usa la deteccion de rostro del documento. Con 4.x los archivos
 # `haarcascade_frontalface_*.xml` vienen incluidos y no hay que descargar
-# ningun modelo adicional.opencv-python-headless>=4.10,<5
-,<5
+# ningun modelo adicional.
+opencv-python-headless>=4.10,<5
+
+# Motor principal: modelos PaddleOCR en ONNX (sin torch, ~300 MB RAM).
+rapidocr>=1.2
+onnxruntime>=1.18
+
+# Motor opcional: mas preciso en algunos casos; ~2 GB con torch.
 torch>=2.4
 torchvision>=0.19
 easyocr>=1.7.1

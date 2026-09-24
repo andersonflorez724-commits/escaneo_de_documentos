@@ -6,14 +6,13 @@ import json
 import logging
 
 from django.conf import settings
-from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST
 
-from apps.scanner.api_client import ApiError, get_service_client, record_scan
+from apps.scanner.api_client import ApiError, get_service_client
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,6 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "
 TRUTHY = {"1", "true", "on", "yes", "si", "sí"}
 
 
-@login_required
 @ensure_csrf_cookie
 @never_cache
 def index(request: HttpRequest) -> HttpResponse:
@@ -29,33 +27,17 @@ def index(request: HttpRequest) -> HttpResponse:
     return render(request, "scanner/index.html", {"active": "scanner"})
 
 
-@login_required
-def history(request: HttpRequest) -> HttpResponse:
-    """Historial de documentos escaneados en la sesion actual."""
-    return render(
-        request,
-        "scanner/history.html",
-        {"active": "history", "scans": request.session.get("scan_history", [])},
-    )
-
-
 def _json_error(message: str, status: int) -> JsonResponse:
     return JsonResponse({"detail": message}, status=status)
 
 
-@login_required
-@require_POST
-def scan_proxy(request: HttpRequest) -> JsonResponse:
-    """Recibe la foto desde el navegador y la reenvia al backend FastAPI.
+def _validate_upload(upload) -> JsonResponse | None:
+    """Comprueba el tipo y el tamano de una imagen subida.
 
-    Hace de puente entre la sesion de Django y el JWT de la API: valida la
-    subida, delega el analisis en FastAPI y guarda un resumen del escaneo en
-    el historial de la sesion (nunca la imagen).
+    Returns:
+        La respuesta de error que se debe devolver, o ``None`` si la imagen
+        es aceptable.
     """
-    upload = request.FILES.get("file")
-    if upload is None:
-        return _json_error("No se recibio ninguna imagen.", 400)
-
     content_type = (upload.content_type or "").lower()
     if content_type and content_type not in ALLOWED_CONTENT_TYPES:
         return _json_error(
@@ -64,43 +46,67 @@ def scan_proxy(request: HttpRequest) -> JsonResponse:
             415,
         )
 
-    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
-    if upload.size > max_bytes:
+    if upload.size > settings.MAX_UPLOAD_MB * 1024 * 1024:
         return _json_error(f"La imagen supera el limite de {settings.MAX_UPLOAD_MB} MB.", 413)
+
+    return None
+
+
+@require_POST
+def scan_proxy(request: HttpRequest) -> JsonResponse:
+    """Recibe las fotos desde el navegador y las reenvia al backend FastAPI.
+
+    Valida la subida y delega el analisis en FastAPI. No se guarda historial
+    ni estado de sesion: cada escaneo es independiente.
+
+    Se aceptan las dos caras del documento: la frontal en ``file`` y el reverso
+    en ``back_file``. Ambas son opcionales por separado, pero al menos una debe
+    llegar.
+    """
+    upload = request.FILES.get("file")
+    if upload is None:
+        return _json_error("No se recibio ninguna imagen.", 400)
+
+    error = _validate_upload(upload)
+    if error is not None:
+        return error
+
+    back_upload = request.FILES.get("back_file")
+    if back_upload is not None:
+        error = _validate_upload(back_upload)
+        if error is not None:
+            return error
 
     include_preview = str(request.POST.get("include_preview", "")).strip().lower() in TRUTHY
 
-    # 1. Token de la API (se reutiliza el de la sesion mientras siga vigente).
     try:
-        client = get_service_client(request.session)
+        client = get_service_client(request)
     except ApiError as exc:
-        logger.error("No se pudo autenticar contra FastAPI: %s", exc.message)
+        logger.error("No se pudo contactar con FastAPI: %s", exc.message)
         return _json_error(exc.message, 503)
 
-    # 2. Analisis del documento.
     try:
         result = client.scan_document(
             content=upload.read(),
             filename=upload.name or "documento.jpg",
             content_type=upload.content_type or "image/jpeg",
+            back_content=back_upload.read() if back_upload is not None else None,
+            back_filename=(back_upload.name if back_upload is not None else "documento-reverso.jpg"),
+            back_content_type=(back_upload.content_type if back_upload is not None else None) or "image/jpeg",
             include_preview=include_preview,
         )
     except ApiError as exc:
-        logger.warning("Fallo el escaneo para %s: %s", request.user.get_username(), exc.message)
+        logger.warning("Fallo el escaneo: %s", exc.message)
         return _json_error(exc.message, exc.http_status)
 
-    # 3. Resumen en el historial de la sesion.
-    record_scan(request.session, result)
-
     logger.info(
-        "Usuario %s proceso un documento (confianza=%s)",
-        request.user.get_username(),
+        "Se proceso un documento (caras=%s, confianza=%s)",
+        result.get("sides_processed"),
         result.get("confidence"),
     )
     return JsonResponse(result)
 
 
-@login_required
 @require_POST
 def validate_mrz_proxy(request: HttpRequest) -> JsonResponse:
     """Valida la consistencia de una MRZ a traves del backend.
@@ -117,9 +123,9 @@ def validate_mrz_proxy(request: HttpRequest) -> JsonResponse:
         return _json_error("El cuerpo de la peticion debe ser un objeto JSON.", 400)
 
     try:
-        client = get_service_client(request.session)
+        client = get_service_client(request)
     except ApiError as exc:
-        logger.error("No se pudo autenticar contra FastAPI: %s", exc.message)
+        logger.error("No se pudo contactar con FastAPI: %s", exc.message)
         return _json_error(exc.message, 503)
 
     try:

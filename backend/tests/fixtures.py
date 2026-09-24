@@ -22,6 +22,40 @@ ICAO_TD3_LINES = (
     "L898902C36UTO7408122F1204159ZE184226B<<<<<10",
 )
 
+# Texto que el OCR entrega sobre una Tarjeta de Identidad colombiana real.
+#
+# La cara frontal lleva el numero y el nombre con los rotulos **debajo** del
+# valor, y la rubrica del titular se cuela entre las lineas; el reverso lleva
+# las fechas, el lugar de nacimiento, el grupo sanguineo y el codigo de
+# verificacion. Sirve para comprobar que el parser no confunde la firma con el
+# nombre ni la fecha de expedicion con la de vencimiento.
+TARJETA_IDENTIDAD_FRONT_TEXT = [
+    "REPÚBLICA DE COLOMBIA",
+    "5 6 IDENTIFICACIÓN PERSONAL",
+    "FIRMA TARJETA DE IDENTIDAD",
+    "NÚMERO 5",
+    "1.033.186.199",
+    "OCAMPO ARTEAGA",
+    "APELLIDOS IRMA",
+    "JUAN JOSE",
+    "NOMBRES",
+    "Iose",
+    "FIRMA",
+]
+
+TARJETA_IDENTIDAD_BACK_TEXT = [
+    "FECHA DE NACIMIENTO 20-SEP-2008",
+    "MEDELLIN",
+    "(ANTIOQUIA)",
+    "LUGAR DE NACIMIENTO",
+    "20-SEP-2026 0+ M",
+    "FECHA DE VENCIMIENTO G $ RH SEXO",
+    "02-FEB-2016 MEDELLIN FECHA Y LUGAR DE EXPEDICIÓN |",
+    "INDiCE Derecho P-0100150-00799122-M-1033186199-20160309 0048868905A "
+    "REGISTRADOAINACIONAL 45514468",
+    "P-0100150-00799122-M-1033186199-20160309 0048866905A 45514466",
+]
+
 # Proporcion cercana a una tarjeta de identificacion real (85,6 x 54 mm).
 DOCUMENT_WIDTH = 1400
 DOCUMENT_HEIGHT = 880
@@ -156,26 +190,39 @@ def render_synthetic_document(
     _put(image, "NOMBRES", 55, 360, scale=0.85, color=(90, 95, 110))
     _put(image, name, 55, 410, scale=1.30, thickness=3)
 
-    _put(image, "FECHA DE NACIMIENTO", 55, 490, scale=0.85, color=(90, 95, 110))
-    _put(image, birth_text, 55, 540, scale=1.25, thickness=3)
+    # La etiqueta y su valor van en la misma linea, como en la mayoria de
+    # documentos reales ("FECHA NAC. 12/08/1974"). Asi la extraccion sigue
+    # siendo correcta aunque el detector de OCR una varias zonas del
+    # documento en un solo bloque: el valor siempre queda detras de su
+    # etiqueta. La variante con el valor en la linea de abajo se cubre con
+    # los textos deterministas de las pruebas del parser.
+    _put(image, "FECHA DE NACIMIENTO", 55, 500, scale=0.85, color=(90, 95, 110), thickness=1)
+    _put(image, birth_text, 430, 502, scale=1.25, thickness=3)
 
-    _put(image, "SEXO", 55, 615, scale=0.85, color=(90, 95, 110))
+    _put(image, "SEXO", 55, 615, scale=0.85, color=(90, 95, 110), thickness=1)
     _put(image, "M", 210, 615, scale=1.25, thickness=3)
 
-    _put(image, "EXPEDICION", 55, 690, scale=0.85, color=(90, 95, 110))
-    _put(image, expiry_text, 55, 740, scale=1.25, thickness=3)
+    # Etiqueta real de caducidad: en los documentos colombianos "EXPEDICION"
+    # es la fecha de expedicion, no la de vencimiento.
+    _put(image, "FECHA DE VENCIMIENTO", 55, 700, scale=0.85, color=(90, 95, 110), thickness=1)
+    _put(image, expiry_text, 480, 702, scale=1.25, thickness=3)
 
     if with_face:
         render_face(image, x=1060, y=210)
 
     if with_mrz:
         # Banda blanca de alto contraste, como en los documentos reales.
-        band_top = DOCUMENT_HEIGHT - 100
+        # La escala y el grosor estan ajustados para que el OCR lea la MRZ de
+        # forma fiable: con trazos mas gruesos los caracteres se pegan y el
+        # reconocedor confunde digitos. La banda deja 35 px libres bajo la
+        # ultima linea: si el renglon toca el borde, el recorte del contorno le
+        # come la mitad inferior y el OCR solo lee una de las dos lineas.
+        band_top = DOCUMENT_HEIGHT - 125
         cv2.rectangle(
             image, (14, band_top), (DOCUMENT_WIDTH - 15, DOCUMENT_HEIGHT - 14), (255, 255, 255), -1
         )
-        _put(image, mrz_lines[0], 40, band_top + 36, scale=1.0, mono=True, thickness=2)
-        _put(image, mrz_lines[1], 40, band_top + 76, scale=1.0, mono=True, thickness=2)
+        _put(image, mrz_lines[0], 40, band_top + 42, scale=1.05, mono=True, thickness=1)
+        _put(image, mrz_lines[1], 40, band_top + 80, scale=1.05, mono=True, thickness=1)
 
     if noise > 0:
         noise_layer = np.random.default_rng(seed=7).normal(0, noise, image.shape)
@@ -209,6 +256,8 @@ def skin_tone_face_image(width: int = 400, height: int = 400) -> np.ndarray:
 
 __all__ = [
     "ICAO_TD3_LINES",
+    "TARJETA_IDENTIDAD_BACK_TEXT",
+    "TARJETA_IDENTIDAD_FRONT_TEXT",
     "build_td3_mrz",
     "document_bytes",
     "encode",

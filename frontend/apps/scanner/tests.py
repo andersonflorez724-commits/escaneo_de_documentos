@@ -2,27 +2,11 @@
 
 from __future__ import annotations
 
-from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import SimpleTestCase
 from django.urls import reverse
 
-User = get_user_model()
 
-PASSWORD = "Segura123"
-
-
-class ScannerPageTests(TestCase):
-    def setUp(self) -> None:
-        User.objects.create_user(username="ana@escaneo.com", email="ana@escaneo.com", password=PASSWORD)
-        self.client.login(username="ana@escaneo.com", password=PASSWORD)
-
-    def test_page_requires_login(self) -> None:
-        self.client.logout()
-        response = self.client.get(reverse("scanner:index"))
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("accounts:login"), response["Location"])
-
+class ScannerPageTests(SimpleTestCase):
     def test_page_renders_the_camera_viewport(self) -> None:
         response = self.client.get(reverse("scanner:index"))
 
@@ -75,55 +59,7 @@ class ScannerPageTests(TestCase):
         self.assertContains(response, 'aria-live="polite"')
 
 
-class HistoryPageTests(TestCase):
-    def setUp(self) -> None:
-        User.objects.create_user(username="ana@escaneo.com", email="ana@escaneo.com", password=PASSWORD)
-        self.client.login(username="ana@escaneo.com", password=PASSWORD)
-
-    def test_requires_login(self) -> None:
-        self.client.logout()
-        response = self.client.get(reverse("scanner:history"))
-        self.assertEqual(response.status_code, 302)
-
-    def test_renders_empty_state(self) -> None:
-        response = self.client.get(reverse("scanner:history"))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Todavia no has escaneado")
-
-    def test_renders_the_scans_stored_in_the_session(self) -> None:
-        session = self.client.session
-        session["scan_history"] = [
-            {
-                "scanned_at": "21/09/2026 10:30",
-                "document_number": "12345678",
-                "name": "JUAN PEREZ",
-                "document_type": "CEDULA DE CIUDADANIA",
-                "valid_photo": True,
-                "mrz_valid": True,
-                "mrz_present": True,
-            }
-        ]
-        session.save()
-
-        response = self.client.get(reverse("scanner:history"))
-
-        self.assertContains(response, "12345678")
-        self.assertContains(response, "JUAN PEREZ")
-
-
-class ScanProxyAccessTests(TestCase):
-    def setUp(self) -> None:
-        User.objects.create_user(username="ana@escaneo.com", email="ana@escaneo.com", password=PASSWORD)
-        self.client.login(username="ana@escaneo.com", password=PASSWORD)
-
-    def test_requires_login(self) -> None:
-        self.client.logout()
-        response = self.client.post(reverse("scanner:scan"))
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn(reverse("accounts:login"), response["Location"])
-
+class ScanProxyAccessTests(SimpleTestCase):
     def test_rejects_get_requests(self) -> None:
         self.assertEqual(self.client.get(reverse("scanner:scan")).status_code, 405)
 

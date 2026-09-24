@@ -14,8 +14,21 @@ from app.services.face_detector import HeuristicFaceDetector
 from app.services.image_utils import InvalidImageError
 from app.services.scanner import DocumentScanner, ScanResult, mask_document_number
 from app.services.ocr_engine import get_ocr_engine
-from tests.fixtures import ICAO_TD3_LINES, build_td3_mrz, document_bytes, encode, render_synthetic_document
-from tests.stubs import FailingOCREngine, RecordingHeuristicEngine, StubOCREngine
+from tests.fixtures import (
+    ICAO_TD3_LINES,
+    TARJETA_IDENTIDAD_BACK_TEXT,
+    TARJETA_IDENTIDAD_FRONT_TEXT,
+    build_td3_mrz,
+    document_bytes,
+    encode,
+    render_synthetic_document,
+)
+from tests.stubs import (
+    FailingOCREngine,
+    RecordingHeuristicEngine,
+    StubOCREngine,
+    TwoSidedStubOCREngine,
+)
 
 COLOMBIAN_ID_TEXT = [
     "REPUBLICA DE COLOMBIA",
@@ -27,7 +40,7 @@ COLOMBIAN_ID_TEXT = [
     "FECHA DE NACIMIENTO",
     "12/08/1974",
     "SEXO M",
-    "EXPEDICION",
+    "FECHA DE VENCIMIENTO",
     "15/04/2022",
 ]
 
@@ -158,6 +171,72 @@ class TestPreprocessing:
         assert abs(result.deskew_angle) <= 20.0
 
 
+class TestTwoSidedScan:
+    """El documento se fotografia por caras y el escaner las fusiona."""
+
+    def build(self) -> DocumentScanner:
+        return DocumentScanner(
+            engine=TwoSidedStubOCREngine(TARJETA_IDENTIDAD_FRONT_TEXT, TARJETA_IDENTIDAD_BACK_TEXT),
+            face_detector=HeuristicFaceDetector(),
+            settings=get_settings(),
+        )
+
+    def test_merges_the_text_of_both_sides(self) -> None:
+        result = self.build().scan_sides(
+            [("front", document_bytes()), ("back", document_bytes())]
+        )
+
+        # Ninguna de las dos caras trae por si sola todos los campos: la
+        # frontal tiene el numero y el nombre, el reverso las fechas y el
+        # grupo sanguineo.
+        assert result.document_number == "1033186199"
+        assert result.name == "JUAN JOSE OCAMPO ARTEAGA"
+        assert result.fields.birth_date == "2008-09-20"
+        assert result.fields.birth_place == "MEDELLIN (ANTIOQUIA)"
+        assert result.fields.expiry_date == "2026-09-20"
+        assert result.fields.blood_type == "O+"
+
+    def test_reports_each_side(self) -> None:
+        result = self.build().scan_sides(
+            [("front", document_bytes()), ("back", document_bytes())]
+        )
+
+        assert [side.side for side in result.sides] == ["front", "back"]
+        assert all(side.ok for side in result.sides)
+        assert result.both_sides is True
+        assert result.sides[0].width > 0
+
+    def test_warns_when_only_one_side_is_scanned(self) -> None:
+        result = build_scanner().scan(document_bytes())
+
+        assert result.both_sides is False
+        assert len(result.sides) == 1
+        assert any("una sola cara" in warning for warning in result.warnings)
+
+    def test_keeps_the_readable_side_when_the_other_fails(self) -> None:
+        result = self.build().scan_sides(
+            [("front", b"esto no es una imagen"), ("back", document_bytes())]
+        )
+
+        assert result.sides[0].ok is False
+        assert result.sides[0].error
+        assert result.sides[1].ok is True
+        assert result.both_sides is False
+
+    def test_fails_when_no_side_can_be_decoded(self) -> None:
+        with pytest.raises(InvalidImageError):
+            self.build().scan_sides(
+                [("front", b"esto no es una imagen"), ("back", b"tampoco")]
+            )
+
+    def test_labels_the_warnings_with_the_side(self) -> None:
+        blurry = encode(np.full((640, 1000, 3), 190, dtype=np.uint8))
+
+        result = self.build().scan_sides([("front", document_bytes()), ("back", blurry)])
+
+        assert any(warning.startswith("[reverso]") for warning in result.warnings)
+
+
 class TestErrorHandling:
     def test_rejects_a_file_that_is_not_an_image(self) -> None:
         with pytest.raises(InvalidImageError):
@@ -243,15 +322,27 @@ class TestEngineWithoutRecognition:
 
         scanner.scan(document_bytes())
 
-        # Una pasada de la pagina completa y dos variantes de la franja MRZ.
-        assert engine.calls >= 3
+        # Una pasada de la pagina completa y otra de la franja MRZ. Como este
+        # motor no reconoce caracteres, no tiene sentido encadenar la segunda
+        # variante: el pipeline se corta.
+        assert engine.calls == 2
+
+    def test_stops_early_when_a_full_mrz_is_already_available(self) -> None:
+        engine = StubOCREngine(["REPUBLICA DE COLOMBIA", *build_td3_mrz()])
+        scanner = DocumentScanner(engine=engine, face_detector=HeuristicFaceDetector())
+
+        result = scanner.scan(document_bytes())
+
+        assert result.mrz.valid is True
+        assert result.used_mrz_passes is False
+        assert len(engine.calls) == 1
 
 
 @pytest.mark.slow
 class TestRealOCREngine:
-    """Inferencia real con el modelo preentrenado EasyOCR.
+    """Inferencia real con el motor configurado (RapidOCR o EasyOCR).
 
-    Es lenta (carga PyTorch y hace tres pasadas por documento), por eso se
+    Es lenta (carga el modelo y hace tres pasadas por documento), por eso se
     marca como `slow` y **comparte un unico escaneo** entre todas las
     comprobaciones de la clase.
 
@@ -267,7 +358,7 @@ class TestRealOCREngine:
         return scanner.scan(document_bytes(), include_preview=True)
 
     def test_uses_the_vision_model(self, scan_result: ScanResult) -> None:
-        assert scan_result.engine == "easyocr"
+        assert scan_result.engine in {"rapidocr", "easyocr"}
         assert scan_result.text_lines, "El OCR no reconocio ningun texto"
 
     def test_reads_the_printed_document_number(self, scan_result: ScanResult) -> None:

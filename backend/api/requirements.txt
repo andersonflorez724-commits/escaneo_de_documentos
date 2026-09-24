@@ -1,0 +1,21 @@
+# ===========================================================================
+#  Dependencias de la funcion serverless de Vercel para la API FastAPI.
+#  Vercel busca el archivo en la misma carpeta que el punto de entrada
+#  (`backend/api/index.py`).
+#
+#  En produccion el entrypoint real es `api/requirements.txt` (raiz). Aqui se
+#  documenta el set equivalente: RapidOCR + ONNX sin PyTorch. OpenCV solo
+#  headless (sin libGL en Serverless) y fijado a la rama 4.x (la 5 elimino
+#  CascadeClassifier que usa la deteccion de rostro).
+# ===========================================================================
+
+fastapi==0.115.6
+pydantic[email]==2.10.4
+python-multipart==0.0.18
+python-dotenv==1.0.1
+Pillow==11.1.0
+numpy==1.26.4
+
+opencv-python-headless==4.10.0.84
+rapidocr==3.9.2
+onnxruntime==1.30.0

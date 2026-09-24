@@ -1,14 +1,13 @@
-"""Motor de OCR basado en el modelo preentrenado **EasyOCR**.
+"""Motores de OCR: RapidOCR (ONNX), EasyOCR (PyTorch) y heuristico.
 
 El motor se carga de forma perezosa (*lazy*) y se reutiliza entre peticiones
-dentro del mismo proceso: cargar los pesos de PyTorch cuesta varios segundos,
-por eso el arranque de la aplicacion llama a :func:`warmup_ocr_engine`.
+dentro del mismo proceso: cargar los pesos cuesta varios segundos, por eso el
+arranque de la aplicacion llama a :func:`warmup_ocr_engine`.
 
-Se define una jerarquia de motores para que el servicio pueda desplegarse en
-entornos donde PyTorch no cabe (por ejemplo funciones serverless de Vercel de
-250 MB) sin romper el contrato de la API:
+Jerarquia de motores:
 
-* :class:`EasyOCREngine`  -> inferencia real con el modelo preentrenado.
+* :class:`RapidOCREngine`  -> modelos PaddleOCR via ONNX Runtime (~80 MB, ~300 MB RAM).
+* :class:`EasyOCREngine`   -> inferencia real con PyTorch (~2 GB).
 * :class:`HeuristicOCREngine` -> preprocesado con OpenCV, sin reconocimiento.
 """
 
@@ -26,7 +25,7 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 
 from app.core.config import Settings, get_settings
-from app.services.image_utils import resize_max, upscale_small
+from app.services.image_utils import resize_max
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +117,11 @@ def group_blocks_into_lines(blocks: Sequence[TextBlock], tolerance: float = 0.03
 
 
 def _to_blocks(raw_results: Iterable[Any], image: np.ndarray, min_confidence: float) -> list[TextBlock]:
-    """Convierte la salida de EasyOCR en :class:`TextBlock` normalizados."""
+    """Convierte la salida de EasyOCR/RapidOCR en :class:`TextBlock` normalizados.
+
+    Cada elemento es una tupla ``(points, text, confidence)`` donde ``points``
+    es una lista de esquinas ``(x, y)``.
+    """
     height, width = image.shape[:2]
     blocks: list[TextBlock] = []
 
@@ -159,12 +162,92 @@ class BaseOCREngine(ABC):
     supports_recognition: bool = True
 
     @abstractmethod
-    def read(self, image: np.ndarray) -> list[TextBlock]:
-        """Extrae los bloques de texto de una imagen BGR."""
+    def read(self, image: np.ndarray, *, max_dimension: int | None = None) -> list[TextBlock]:
+        """Extrae los bloques de texto de una imagen BGR o en escala de grises."""
 
     def warmup(self) -> None:
         """Carga anticipada del modelo. Por defecto no hace nada."""
         return None
+
+
+# ---------------------------------------------------------------------------
+# Motor ligero: RapidOCR (modelos PaddleOCR via ONNX Runtime)
+# ---------------------------------------------------------------------------
+class RapidOCREngine(BaseOCREngine):
+    """Inferencia con RapidOCR: mismos modelos que PaddleOCR en formato ONNX.
+
+    Sin PyTorch: el paquete pesa ~80 MB y el proceso se queda en ~300-400 MB
+    de RAM, por eso es el motor recomendado para contenedores gratuitos y
+    para entornos con poca memoria. Los pesos ONNX viajan con el paquete
+    (``rapidocr/models``) y no se descargan en tiempo de ejecucion.
+    """
+
+    name = "rapidocr"
+
+    def __init__(
+        self,
+        min_confidence: float = 0.30,
+        max_dimension: int = 1600,
+        languages: Sequence[str] = ("es", "en"),
+    ) -> None:
+        # RapidOCR usa un diccionario unico (ch + en) con soporte de latin;
+        # el parametro se acepta por simetria con EasyOCR y para el log.
+        self.languages = tuple(languages) or ("es", "en")
+        self.min_confidence = min_confidence
+        self.max_dimension = max_dimension
+        self._engine: Any | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def loaded(self) -> bool:
+        return self._engine is not None
+
+    def _ensure_engine(self) -> Any:
+        if self._engine is not None:
+            return self._engine
+
+        with self._lock:
+            if self._engine is None:
+                try:
+                    from rapidocr import RapidOCR
+                except ImportError as exc:  # pragma: no cover
+                    raise OCREngineUnavailableError(
+                        "RapidOCR no esta instalado. Instala backend/requirements.txt "
+                        "o configura OCR_ENGINE=heuristic."
+                    ) from exc
+
+                logger.info("Cargando modelos RapidOCR/ONNX (idiomas=%s)", ",".join(self.languages))
+                started = time.perf_counter()
+                self._engine = RapidOCR()
+                logger.info("Modelos RapidOCR cargados en %.1f s", time.perf_counter() - started)
+
+        return self._engine
+
+    def warmup(self) -> None:
+        self._ensure_engine()
+
+    def read(self, image: np.ndarray, *, max_dimension: int | None = None) -> list[TextBlock]:
+        engine = self._ensure_engine()
+        prepared, _ = resize_max(image, max_dimension or self.max_dimension)
+
+        with self._lock:
+            raw = engine(prepared)
+
+        if raw is None:
+            return []
+
+        boxes = getattr(raw, "boxes", None)
+        txts = getattr(raw, "txts", None) or ()
+        scores = getattr(raw, "scores", None) or ()
+        if boxes is None or len(boxes) == 0:
+            return []
+
+        normalized: list[tuple] = []
+        for box, text, score in zip(boxes, txts, scores):
+            points = [(float(p[0]), float(p[1])) for p in box]
+            normalized.append((points, str(text), float(score)))
+
+        return _to_blocks(normalized, prepared, self.min_confidence)
 
 
 # ---------------------------------------------------------------------------
@@ -186,11 +269,14 @@ class EasyOCREngine(BaseOCREngine):
         use_gpu: bool = False,
         min_confidence: float = 0.30,
         max_dimension: int = 1600,
+        canvas_size: int = 0,
     ) -> None:
         self.languages = tuple(languages) or ("es", "en")
         self.use_gpu = use_gpu
         self.min_confidence = min_confidence
         self.max_dimension = max_dimension
+        # 0 = ajustar el lienzo al tamano real de la imagen (ver `read`).
+        self.canvas_size = canvas_size
         self._reader: Any | None = None
         self._lock = threading.Lock()
 
@@ -232,11 +318,24 @@ class EasyOCREngine(BaseOCREngine):
         self._ensure_reader()
 
     # -------------------------------------------------------------- inferencia
-    def read(self, image: np.ndarray) -> list[TextBlock]:
-        reader = self._ensure_reader()
+    def read(self, image: np.ndarray, *, max_dimension: int | None = None) -> list[TextBlock]:
+        """Reconoce el texto de una imagen ya preprocesada.
 
-        prepared, _ = resize_max(image, self.max_dimension)
-        prepared = upscale_small(prepared, min_width=1000)
+        Args:
+            image: Imagen BGR o en escala de grises.
+            max_dimension: Limite del lado mayor para esta llamada. Permite
+                procesar la pagina a baja resolucion y la franja de la MRZ a
+                alta sin cambiar la configuracion del motor.
+        """
+        reader = self._ensure_reader()
+        prepared, _ = resize_max(image, max_dimension or self.max_dimension)
+
+        # EasyOCR rellena el lienzo a `canvas_size` (2560 por defecto) para una
+        # imagen cuadrada: con una foto apaisada eso multiplica por mas de tres
+        # los pixeles que procesa el detector y el tiempo de inferencia. Si no
+        # se indica lo contrario, el lienzo se ajusta al propio tamano de la
+        # imagen; ese trabajo no aporta nada al reconocimiento.
+        canvas = self.canvas_size or max(prepared.shape[:2])
 
         # El lector de EasyOCR no es seguro entre hilos: se serializa.
         with self._lock:
@@ -249,16 +348,17 @@ class EasyOCREngine(BaseOCREngine):
                 link_threshold=0.4,
                 width_ths=0.7,
                 add_margin=0.06,
+                canvas_size=int(canvas),
             )
 
         return _to_blocks(raw, prepared, self.min_confidence)
 
 
 # ---------------------------------------------------------------------------
-# Motor ligero: sin PyTorch (serverless)
+# Motor ligero: sin framework pesado (serverless)
 # ---------------------------------------------------------------------------
 class HeuristicOCREngine(BaseOCREngine):
-    """Motor de respaldo cuando PyTorch/EasyOCR no estan disponibles.
+    """Motor de respaldo cuando RapidOCR/EasyOCR no estan disponibles.
 
     Ejecuta el preprocesado y la deteccion de regiones de texto con OpenCV
     (gradiente morfologico + MSER) pero **no realiza reconocimiento de
@@ -272,7 +372,7 @@ class HeuristicOCREngine(BaseOCREngine):
     def __init__(self, max_dimension: int = 1600) -> None:
         self.max_dimension = max_dimension
 
-    def read(self, image: np.ndarray) -> list[TextBlock]:  # noqa: ARG002 - firma comun
+    def read(self, image: np.ndarray, *, max_dimension: int | None = None) -> list[TextBlock]:  # noqa: ARG002
         # Sin modelo no hay texto que devolver: la deteccion de regiones se
         # reporta desde analyze_quality/face detection.
         return []
@@ -281,6 +381,11 @@ class HeuristicOCREngine(BaseOCREngine):
 # ---------------------------------------------------------------------------
 # Fabrica
 # ---------------------------------------------------------------------------
+def rapidocr_is_available() -> bool:
+    """Indica si el paquete RapidOCR es importable en este entorno."""
+    return importlib.util.find_spec("rapidocr") is not None
+
+
 def easyocr_is_available() -> bool:
     """Indica si el paquete EasyOCR es importable en este entorno."""
     return importlib.util.find_spec("easyocr") is not None
@@ -289,30 +394,47 @@ def easyocr_is_available() -> bool:
 def _build_engine(settings: Settings) -> BaseOCREngine:
     choice = (settings.ocr_engine or "auto").lower()
 
+    if choice == "rapidocr":
+        return RapidOCREngine(
+            min_confidence=settings.ocr_min_confidence,
+            max_dimension=settings.max_image_dimension,
+            languages=settings.ocr_languages,
+        )
+
     if choice == "easyocr":
         return EasyOCREngine(
             languages=settings.ocr_languages,
             use_gpu=settings.ocr_use_gpu,
             min_confidence=settings.ocr_min_confidence,
             max_dimension=settings.max_image_dimension,
+            canvas_size=settings.ocr_canvas_size,
         )
 
     if choice == "heuristic":
         logger.info("OCR_ENGINE=heuristic: se omite el modelo preentrenado.")
         return HeuristicOCREngine(max_dimension=settings.max_image_dimension)
 
-    # auto
+    # auto: RapidOCR primero (ligero, sin torch), despues EasyOCR.
+    if rapidocr_is_available():
+        return RapidOCREngine(
+            min_confidence=settings.ocr_min_confidence,
+            max_dimension=settings.max_image_dimension,
+            languages=settings.ocr_languages,
+        )
+
     if easyocr_is_available():
         return EasyOCREngine(
             languages=settings.ocr_languages,
             use_gpu=settings.ocr_use_gpu,
             min_confidence=settings.ocr_min_confidence,
             max_dimension=settings.max_image_dimension,
+            canvas_size=settings.ocr_canvas_size,
         )
 
     logger.warning(
-        "EasyOCR no esta instalado: se usa el motor heuristico sin reconocimiento "
-        "de texto. Para inferencia real instala backend/requirements.txt."
+        "Ni RapidOCR ni EasyOCR estan instalados: se usa el motor heuristico "
+        "sin reconocimiento de texto. Para inferencia real instala "
+        "backend/requirements.txt."
     )
     return HeuristicOCREngine(max_dimension=settings.max_image_dimension)
 
@@ -343,10 +465,12 @@ __all__ = [
     "HeuristicOCREngine",
     "OCREngineUnavailableError",
     "OCRResult",
+    "RapidOCREngine",
     "TextBlock",
     "easyocr_is_available",
     "get_ocr_engine",
     "group_blocks_into_lines",
+    "rapidocr_is_available",
     "reset_ocr_engine",
     "warmup_ocr_engine",
 ]

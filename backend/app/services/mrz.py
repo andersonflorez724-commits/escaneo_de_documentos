@@ -47,6 +47,21 @@ TD3_LINE_LENGTH = 44
 MRZ_LINE_PATTERN = re.compile(r"^[A-Z0-9<]{28,46}$")
 MIN_FILLER_RATIO = 0.06  # un documento real casi siempre trae rellenos '<'
 
+# La Tarjeta de Identidad y la Cedula de Ciudadania de Colombia **no** llevan
+# una MRZ ICAO: el reverso termina en un codigo de verificacion con este
+# aspecto (tipo, oficina, serial, sexo, numero de documento, fecha):
+#
+#     P-0100150-00799122-M-1033186199-20160309
+#
+# Sin este filtro el codigo se confundiria con una MRZ TD2 deformada y la API
+# responderia con digitos de control inventados.
+# Se busca en cualquier posicion (no solo al principio): el detector de OCR
+# suele pegar el codigo a otras zonas del reverso en un mismo bloque.
+COLOMBIAN_CODE_PATTERN = re.compile(
+    r"(?P<type>[A-Z])\s*-\s*(?P<office>\d{6,8})\s*-\s*(?P<serial>\d{6,9})\s*-\s*"
+    r"(?P<sex>[MF])\s*-\s*(?P<number>\d{6,12})\s*-\s*(?P<date>\d{8})"
+)
+
 # Tope de lecturas alternativas que se prueban al elegir la mejor combinacion.
 MAX_MRZ_CANDIDATES = 6
 
@@ -151,16 +166,38 @@ def repair_line(line: str, expected_length: int) -> tuple[str, list[str]]:
 # ---------------------------------------------------------------------------
 # Deteccion de las lineas MRZ dentro del texto del OCR
 # ---------------------------------------------------------------------------
+def _has_mrz_structure(cleaned: str) -> bool:
+    """La linea encaja con la estructura de alguno de los formatos oficiales."""
+    return any(
+        matcher(cleaned)
+        for matcher in (
+            looks_like_header_line,
+            looks_like_data_line,
+            looks_like_td1_header,
+            looks_like_td1_middle,
+            looks_like_td1_name,
+        )
+    )
+
+
 def _is_plausible_line(cleaned: str) -> bool:
-    """Una linea MRZ plausible trae rellenos ``<`` o digitos de control."""
+    """Una linea MRZ plausible trae rellenos ``<`` o la estructura oficial.
+
+    Exigir rellenos evita que un renglon normal del documento con muchos
+    caracteres (por ejemplo ``FECHA DE VENCIMIENTO 20-SEP-2026``, que al
+    normalizarse queda como una cadena larga de letras y digitos) se lea como
+    una MRZ y contamine los campos.
+    """
     if len(cleaned) < TD1_LINE_LENGTH:
         return False
     if not MRZ_LINE_PATTERN.match(cleaned):
         return False
 
     filler_ratio = cleaned.count(FILLER) / len(cleaned)
-    has_digit = any(char.isdigit() for char in cleaned)
-    return not (filler_ratio < MIN_FILLER_RATIO and not has_digit)
+    if filler_ratio >= MIN_FILLER_RATIO:
+        return True
+
+    return _has_mrz_structure(cleaned)
 
 
 def _split_merged_line(cleaned: str) -> list[str]:
@@ -182,16 +219,39 @@ def _split_merged_line(cleaned: str) -> list[str]:
     return pieces
 
 
+def is_verification_code_line(line: str) -> bool:
+    """Indica si la linea es el codigo de verificacion de un documento colombiano."""
+    compact = re.sub(r"\s+", "", str(line)).upper()
+    return bool(COLOMBIAN_CODE_PATTERN.search(compact))
+
+
+def parse_verification_code(line: str) -> dict[str, str] | None:
+    """Descompone el codigo de verificacion del reverso.
+
+    Returns:
+        Diccionario con ``type``, ``office``, ``serial``, ``sex``, ``number``
+        y ``date`` (esta ultima en formato ``AAAAMMDD``), o ``None`` si la
+        linea no es un codigo de verificacion.
+    """
+    compact = re.sub(r"\s+", "", str(line)).upper()
+    match = COLOMBIAN_CODE_PATTERN.search(compact)
+    return match.groupdict() if match else None
+
+
 def find_mrz_lines(texts: Iterable[str]) -> list[str]:
     """Extrae del texto OCR las lineas candidatas a formar la MRZ.
 
     Se aceptan tanto renglones individuales como bloques que el OCR haya
-    unido, que se trocean por multiples de las longitudes oficiales.
+    unido, que se trocean por multiples de las longitudes oficiales. El codigo
+    de verificacion de los documentos colombianos se descarta: no es una MRZ.
     """
     candidates: list[str] = []
 
     for raw in texts:
         for piece in str(raw).splitlines():
+            if is_verification_code_line(piece):
+                continue
+
             cleaned = normalize_line(piece)
             if _is_plausible_line(cleaned):
                 candidates.append(cleaned)
@@ -226,7 +286,10 @@ def detect_format(lines: list[str]) -> str | None:
         return "TD3"
     if longest >= TD2_LINE_LENGTH - 2:
         return "TD2"
-    if longest >= TD1_LINE_LENGTH - 2:
+    # Una unica linea corta no basta para afirmar que el documento sea TD1: el
+    # OCR deja a menudo renglones sueltos que no forman una MRZ, y darlos por
+    # buenos inventaba digitos de control y sobrescribia los campos leidos.
+    if len(lengths) >= 2 and longest >= TD1_LINE_LENGTH - 2:
         return "TD1"
     return None
 
@@ -460,12 +523,22 @@ def parse_mrz(lines: Iterable[str]) -> MRZResult:
     """
     raw_lines = [line for line in (str(item) for item in lines) if line.strip()]
 
-    if not raw_lines:
+    # El codigo de verificacion del reverso de los documentos colombianos no es
+    # una MRZ: al descartarlo aqui, el endpoint de validacion tampoco lo da por
+    # bueno cuando el cliente lo envia en crudo.
+    usable_lines = [line for line in raw_lines if not is_verification_code_line(line)]
+
+    if not usable_lines:
         empty = MRZResult(lines=raw_lines)
-        empty.errors.append("No se recibieron lineas MRZ para analizar.")
+        empty.errors.append(
+            "No se recibieron lineas MRZ para analizar."
+            if not raw_lines
+            else "Las lineas recibidas no forman una MRZ: son el codigo de "
+            "verificacion del reverso."
+        )
         return empty
 
-    candidates = _dedupe_candidates([normalize_line(line) for line in raw_lines])
+    candidates = _dedupe_candidates([normalize_line(line) for line in usable_lines])
     mrz_format = detect_format(candidates)
     if mrz_format is None:
         unknown = MRZResult(lines=raw_lines)
@@ -688,6 +761,7 @@ def extract_and_validate(texts: Iterable[str]) -> MRZResult:
 
 __all__ = [
     "CHECK_WEIGHTS",
+    "COLOMBIAN_CODE_PATTERN",
     "MRZ_ALPHABET",
     "MRZResult",
     "assign_slots",
@@ -696,8 +770,10 @@ __all__ = [
     "detect_format",
     "extract_and_validate",
     "find_mrz_lines",
+    "is_verification_code_line",
     "normalize_line",
     "parse_mrz",
+    "parse_verification_code",
     "repair_line",
     "validate_mrz_text",
     "verify_check_digit",

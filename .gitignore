@@ -6,6 +6,8 @@ __pycache__/
 *$py.class
 *.so
 *.egg-info/
+build/
+dist/
 .venv/
 venv/
 env/
@@ -18,7 +20,11 @@ db.sqlite3
 db.sqlite3-journal
 *.log
 /staticfiles/
+frontend/staticfiles/
 /media/
+# collectstatic de Vercel se sube al repo (lo sirve el CDN); no ignorar public/static.
+/public/*
+!/public/static/
 
 # ---------------------------------------------------------------------------
 # Entorno y secretos  (NUNCA subir credenciales al repositorio)

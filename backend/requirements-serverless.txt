@@ -1,21 +1,25 @@
 # ===========================================================================
 #  Backend FastAPI - dependencias para Serverless Functions (Vercel)
 #
-#  Las funciones serverless de Vercel tienen un limite de ~250 MB
-#  descomprimidos. PyTorch + EasyOCR pesan ~2 GB, por lo que NO pueden
-#  empaquetarse ahi. Con este set el servicio arranca con
-#  OCR_ENGINE=heuristic (preprocesado con OpenCV + parser de documento).
+#  Vercel incluye RapidOCR + ONNX Runtime en el bundle (ver api/requirements.txt
+#  y maxLambdaSize 500mb en vercel.json). Este archivo documenta el set minimo
+#  equivalente cuando se empaqueta la API de forma independiente.
 #
-#  Para inferencia real con el modelo preentrenado se despliega el backend
-#  en un contenedor (Docker / Hugging Face Spaces / Render) con
-#  backend/requirements.txt y se apunta FASTAPI_BASE_URL hacia el.
+#  PyTorch + EasyOCR (~2 GB) no caben en Serverless. El contenedor Docker
+#  (backend/requirements-rapidocr.txt) sigue siendo la via recomendada para
+#  desacoplar el OCR del limite de la funcion.
 # ===========================================================================
 
 fastapi>=0.115
 pydantic>=2.9
 python-multipart>=0.0.12
-python-jose[cryptography]>=3.3
 python-dotenv>=1.0
 Pillow>=10.4
 numpy>=1.26
-opencv-python-headless>=4.10
+
+# OpenCV se fija a la rama 4.x: la 5 elimino CascadeClassifier (deteccion de
+# rostro). headless = sin libGL (obligatorio en Serverless).
+opencv-python-headless>=4.10,<5
+
+rapidocr>=1.2
+onnxruntime>=1.18

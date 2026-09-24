@@ -1,0 +1,38 @@
+# ===========================================================================
+#  Dependencias de la funcion serverless unica de Vercel (api/index.py).
+#  Vercel busca este archivo en la misma carpeta que el punto de entrada.
+#
+#  Solo paquetes de PyPI: `uv lock` falla con rutas locales relativas
+#  (las resuelve dos veces y busca api/api/...). El installCommand
+#  re-instala solo opencv-python-headless para no arrastrar GUI/libGL.
+#
+#  Tamaño de wheels ~135 MB (< maxLambdaSize 500mb). Sin PyTorch/EasyOCR.
+# ===========================================================================
+
+# --- FastAPI (backend de vision) ---
+fastapi==0.115.6
+pydantic[email]==2.10.4
+python-multipart==0.0.18
+python-dotenv==1.0.1
+Pillow==11.1.0
+numpy==1.26.4
+
+# OpenCV solo headless: sin libGL en el runtime de Vercel.
+opencv-python-headless==4.10.0.84
+
+# --- Dependencias de rapidocr (uv tambien resuelve opencv-python de GUI) ---
+pyclipper>=1.2.0
+six>=1.15.0
+Shapely!=2.0.4,>=1.7.1
+PyYAML
+tqdm
+omegaconf!=2.2.1
+requests
+colorlog
+
+# --- OCR: runtime ONNX (pesos ONNX van en el wheel de rapidocr) ---
+onnxruntime==1.30.0
+rapidocr==3.9.2
+
+# --- Django (frontend) ---
+Django>=5.0

@@ -7,7 +7,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.api.deps import CurrentUser
 from app.core.config import get_settings
 from app.schemas.document import (
     DocumentFieldsOut,
@@ -17,6 +16,7 @@ from app.schemas.document import (
     MRZRequest,
     MRZValidationResponse,
     QualityInfo,
+    SideInfoOut,
 )
 from app.services.image_utils import ALLOWED_MIME_TYPES
 from app.services.mrz import extract_and_validate, parse_mrz
@@ -34,8 +34,17 @@ router = APIRouter(tags=["Documentos"])
 settings = get_settings()
 
 FILE_DESCRIPTION = (
-    "Fotografia del documento de identificacion (JPEG, PNG o WEBP). "
-    "Puede ser la captura directa de la camara del dispositivo."
+    "Fotografia de la **cara frontal** del documento de identificacion "
+    "(JPEG, PNG o WEBP). Puede ser la captura directa de la camara del "
+    "dispositivo. Aporta el numero, el nombre y la fotografia del titular."
+)
+
+BACK_FILE_DESCRIPTION = (
+    "Fotografia del **reverso** del documento (JPEG, PNG o WEBP). Es opcional "
+    "pero necesaria para los documentos colombianos: en el reverso estan la "
+    "fecha y el lugar de nacimiento, la expedicion, el grupo sanguineo y el "
+    "codigo de verificacion. Si se envia, el texto de ambas caras se fusiona "
+    "antes de extraer los campos."
 )
 
 MRZ_EXAMPLES = {
@@ -109,6 +118,7 @@ async def _read_upload(upload: UploadFile, max_bytes: int) -> bytes:
 def _build_response(result: ScanResult) -> DocumentScanResponse:
     """Traduce el resultado del escaneo al contrato publico de la API."""
     fields = result.fields
+    processed = len([side for side in result.sides if side.ok])
 
     if not fields.document_number and not fields.name:
         message = "No se pudo extraer informacion legible del documento. Intenta con mejor iluminacion."
@@ -116,8 +126,13 @@ def _build_response(result: ScanResult) -> DocumentScanResponse:
         message = "Datos extraidos, pero la MRZ del documento no es consistente."
     elif not result.valid_photo:
         message = "Datos extraidos, pero la foto del titular no supera la inspeccion."
+    elif not result.both_sides:
+        message = (
+            "Datos extraidos de una sola cara del documento. Agrega el reverso para "
+            "completar la fecha y el lugar de nacimiento, la expedicion y el grupo sanguineo."
+        )
     else:
-        message = "Documento leido y validado correctamente."
+        message = "Documento leido y validado correctamente en ambas caras."
 
     return DocumentScanResponse(
         success=bool(fields.document_number or fields.name),
@@ -131,6 +146,9 @@ def _build_response(result: ScanResult) -> DocumentScanResponse:
         mrz=MRZInfo.model_validate(result.mrz.as_dict()),
         face=FaceInfo.model_validate(result.face.as_dict()),
         quality=QualityInfo.model_validate(result.quality.as_dict()),
+        sides=[SideInfoOut.model_validate(side.as_dict()) for side in result.sides],
+        sides_processed=processed,
+        both_sides=result.both_sides,
         engine=result.engine,
         processing_ms=round(result.processing_ms, 2),
         document_detected=result.document_detected,
@@ -145,19 +163,26 @@ def _build_response(result: ScanResult) -> DocumentScanResponse:
     "/scan-document",
     response_model=DocumentScanResponse,
     status_code=status.HTTP_200_OK,
-    summary="Leer los datos de un documento de identificacion",
+    summary="Leer los datos de un documento de identificacion (frontal y reverso)",
     description=(
-        "Recibe la **foto del documento** tomada por la camara y devuelve los "
-        "datos del titular.\n\n"
+        "Recibe la **foto del documento** tomada por la camara --  la cara "
+        "frontal en `file` y, opcionalmente, el reverso en `back_file` -- y "
+        "devuelve los datos del titular.\n\n"
         "El pipeline ejecuta: decodificacion e.g. EXIF, analisis de calidad, "
         "deteccion y rectificacion del contorno del documento, enderezado, "
         "deteccion del rostro, OCR con el modelo preentrenado (pagina completa "
         "y franja MRZ) y validacion ICAO 9293.\n\n"
+        "Los documentos de identificacion tienen dos caras y cada una aporta "
+        "campos distintos (frontal: numero, nombres y apellidos, fotografia; "
+        "reverso: fecha y lugar de nacimiento, expedicion, vencimiento y grupo "
+        "sanguineo). Cuando se envian ambas, el texto se **fusiona** antes de "
+        "extraer los campos, de modo que la validacion de la MRZ o del codigo "
+        "de verificacion del reverso comprueba tambien el numero leido en la "
+        "frontal. En `sides` se informa del resultado de cada cara.\n\n"
         "Campos minimos garantizados en la respuesta: `document_number`, "
         "`name` y `valid_photo`."
     ),
     responses={
-        401: {"description": "Token JWT ausente, invalido o expirado."},
         413: {"description": "La imagen supera el limite de tamano."},
         415: {"description": "Tipo de archivo no soportado."},
         422: {"description": "La imagen no se pudo decodificar."},
@@ -168,11 +193,17 @@ async def scan_document(
         UploadFile,
         File(
             description=FILE_DESCRIPTION,
-            examples=["documento.jpg"],
+            examples=["documento-frontal.jpg"],
         ),
     ],
-    current_user: CurrentUser,
     scanner: Annotated[DocumentScanner, Depends(get_document_scanner)],
+    back_file: Annotated[
+        UploadFile | None,
+        File(
+            description=BACK_FILE_DESCRIPTION,
+            examples=["documento-reverso.jpg"],
+        ),
+    ] = None,
     include_preview: Annotated[
         bool,
         Query(
@@ -183,15 +214,19 @@ async def scan_document(
         ),
     ] = False,
 ) -> DocumentScanResponse:
-    data = await _read_upload(file, settings.max_upload_bytes)
+    sides: list[tuple[str, bytes]] = [
+        ("front", await _read_upload(file, settings.max_upload_bytes))
+    ]
+    if back_file is not None:
+        sides.append(("back", await _read_upload(back_file, settings.max_upload_bytes)))
 
     # Los errores de dominio (imagen invalida, demasiado grande, motor no
     # disponible) los traduce el manejador global con el formato uniforme.
-    result = scanner.scan(data, include_preview=include_preview)
+    result = scanner.scan_sides(sides, include_preview=include_preview)
 
     logger.info(
-        "Usuario %s escaneo un documento (numero=%s, confianza=%.2f, mrz_extra=%s)",
-        current_user.email,
+        "Se escaneo un documento (caras=%d, numero=%s, confianza=%.2f, mrz_extra=%s)",
+        len(sides),
         mask_document_number(result.document_number),
         result.confidence,
         result.used_mrz_passes,
@@ -218,13 +253,11 @@ async def scan_document(
         "o un documento manipulado falla en al menos un digito de control."
     ),
     responses={
-        401: {"description": "Token JWT ausente, invalido o expirado."},
         422: {"description": "No se envio ni `mrz_lines` ni `text`."},
     },
 )
 async def validate_mrz(
     payload: Annotated[MRZRequest, Body(openapi_examples=MRZ_EXAMPLES)],
-    current_user: CurrentUser,
 ) -> MRZValidationResponse:
     if payload.mrz_lines:
         result = parse_mrz(payload.mrz_lines)
@@ -246,8 +279,7 @@ async def validate_mrz(
         )
 
     logger.info(
-        "Usuario %s valido una MRZ (formato=%s, valida=%s)",
-        current_user.email,
+        "Se valido una MRZ (formato=%s, valida=%s)",
         result.mrz_format,
         result.valid,
     )

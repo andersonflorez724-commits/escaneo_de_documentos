@@ -10,8 +10,6 @@ from app.core.errors import AppError, InvalidImageError
 from app.main import app
 
 API = "/api/v1"
-SEED_EMAIL = "admin@escaneo.com"
-SEED_PASSWORD = "Admin123*"
 
 
 @pytest.fixture(scope="module")
@@ -20,17 +18,10 @@ def client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-@pytest.fixture(scope="module")
-def auth(client: TestClient) -> dict[str, str]:
-    response = client.post(f"{API}/auth/login", json={"email": SEED_EMAIL, "password": SEED_PASSWORD})
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
-
-
 class TestDomainErrors:
-    def test_invalid_image_maps_to_422_with_a_code(self, client: TestClient, auth: dict[str, str]) -> None:
+    def test_invalid_image_maps_to_422_with_a_code(self, client: TestClient) -> None:
         response = client.post(
             f"{API}/scan-document",
-            headers=auth,
             files={"file": ("doc.jpg", b"no soy una imagen", "image/jpeg")},
         )
 
@@ -55,7 +46,7 @@ class TestDomainErrors:
 
 class TestValidationErrors:
     def test_validation_error_uses_the_uniform_shape(self, client: TestClient) -> None:
-        response = client.post(f"{API}/auth/login", json={"email": "no-es-correo", "password": "x"})
+        response = client.post(f"{API}/validate-mrz", json={"mrz_lines": 123})
 
         assert response.status_code == 422
         body = response.json()
@@ -64,17 +55,17 @@ class TestValidationErrors:
         assert "summary" in body["context"]
 
     def test_validation_summary_is_readable(self, client: TestClient) -> None:
-        response = client.post(f"{API}/auth/register", json={"email": "a@b.com", "full_name": "x", "password": "y"})
+        response = client.post(f"{API}/validate-mrz", json={"mrz_lines": ["only-one-line", "two", "three", "four"]})
 
         summary = response.json()["context"]["summary"]
-        assert "full_name" in summary or "password" in summary
+        assert "mrz_lines" in summary
 
     def test_validation_errors_do_not_leak_internal_objects(self, client: TestClient) -> None:
         # `ctx` puede contener la excepcion original del validador y no es
         # serializable a JSON: debe filtrarse.
         response = client.post(
-            f"{API}/auth/register",
-            json={"email": "c@d.com", "full_name": "Persona Valida", "password": "sinnumeros"},
+            f"{API}/validate-mrz",
+            json={"mrz_lines": {"no": "es una lista"}},
         )
 
         assert response.status_code == 422
@@ -87,13 +78,6 @@ class TestHttpErrors:
         response = client.get(f"{API}/no-existe")
 
         assert response.status_code == 404
-        assert response.json()["code"] == "http_error"
-
-    def test_missing_token_keeps_the_www_authenticate_header(self, client: TestClient) -> None:
-        response = client.get(f"{API}/auth/me")
-
-        assert response.status_code == 401
-        assert response.headers["WWW-Authenticate"] == "Bearer"
         assert response.json()["code"] == "http_error"
 
 

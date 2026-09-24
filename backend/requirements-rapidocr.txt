@@ -1,0 +1,26 @@
+# ===========================================================================
+#  Backend FastAPI - dependencias del contenedor RapidOCR (sin PyTorch)
+#
+#  Motor: RapidOCR (modelos PaddleOCR via ONNX Runtime) + OpenCV.
+#  Paquete total ~150-200 MB; proceso ~300-400 MB de RAM.
+#  Suitable para contenedores gratuitos (Render free 512 MB, etc.).
+# ===========================================================================
+
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic[email]>=2.9
+python-multipart>=0.0.12
+
+# Utilidades
+python-dotenv>=1.0
+Pillow>=10.4
+numpy>=1.26
+
+# ------------------------------ Stack ML -----------------------------------
+# OpenCV se fija a la rama 4.x: OpenCV 5 elimino CascadeClassifier y las
+# cascadas de Haar que usa la deteccion de rostro del documento.
+opencv-python-headless>=4.10,<5
+
+# OCR ligero: modelos PP-OCR en ONNX, sin torch.
+rapidocr>=1.2
+onnxruntime>=1.18
