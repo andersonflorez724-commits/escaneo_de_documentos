@@ -171,6 +171,40 @@ class TestParseTD1:
         assert result.surname == "ERIKSSON"
         assert result.given_names == "ANNA MARIA"
 
+    def test_colombian_cc_strip_is_read_as_td1(self) -> None:
+        # Franja tipo TD1 de la Cedula colombiana: el numero va en la linea 1
+        # con el control impreso en '<' (documento que no usa ese check) y el
+        # NUIP en el campo opcional de la linea 2.
+        lines = [
+            "1CC0L000000012<<<<<<<<<<<<<<<<",
+            "8808213F3101300C0L1234567890<9",
+        ]
+        result = parse_mrz(lines)
+
+        assert result.mrz_format == "TD1"
+        assert result.birth_date == date(1988, 8, 21)
+        assert result.expiry_date == date(2031, 1, 30)
+        assert result.sex == "F"
+        assert result.checks["birth_date"] is True
+        assert result.checks["expiry_date"] is True
+        # El '<' de la casilla de control no se cuenta como falla.
+        assert "document_number" not in result.checks
+        assert "personal_number" not in result.checks
+
+    def test_detects_td1_even_with_a_long_noise_candidate(self) -> None:
+        # Una linea de 44 caracteres de texto visual no debe forzar TD3 cuando
+        # hay dos renglones con estructura TD1.
+        assert (
+            detect_format(
+                [
+                    "REGISTRADORNACIONALNEZ<GARCIA<<MARIA<DANIELA",
+                    "1CC0L000000012<<<<<<<<<<<<<<<<",
+                    "8808213F3101300C0L1234567890<9",
+                ]
+            )
+            == "TD1"
+        )
+
 
 class TestInconsistency:
     def test_tampered_document_number_fails_check(self) -> None:
@@ -212,6 +246,15 @@ class TestFindMrzLines:
 
         assert find_mrz_lines([code]) == []
         assert parse_mrz([code]).detected is False
+
+    def test_ignores_visual_noise_lines(self) -> None:
+        # Firma y encabezado de la oficina: longitud compatible con la MRZ pero
+        # sin estructura; si entran, la deteccion se inclina a TD3.
+        noise = [
+            "FIRMAMARTNENACIONALLDADESTATURASEXO",
+            "REGISTRADORNACIONALNEZ<GARCIA<<MARIA<DANIELA",
+        ]
+        assert find_mrz_lines(noise) == []
 
     def test_ignores_a_long_line_without_structure(self) -> None:
         # Un renglon normal del documento, normalizado, parece una MRZ por su

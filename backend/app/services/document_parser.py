@@ -70,10 +70,11 @@ SURNAME_LABEL_PATTERN = re.compile(r"\b(?:APELLIDOS|APELLIDO|SURNAMES?)\b")
 GIVEN_NAME_LABEL_PATTERN = re.compile(r"\b(?:NOMBRES|NOMBRE|GIVEN NAMES?)\b")
 NATIONALITY_LABEL_PATTERN = re.compile(r"\b(?:NACIONALIDAD|NATIONALITY|NAC\.?)\b")
 # El OCR confunde la "S" de "G S RH" con el simbolo del dolar y el "O" del
-# grupo con un cero, por eso el patron admite esas variantes.
+# grupo con un cero, por eso el patron admite esas variantes. Tambien se lee
+# "G.S." sin la palabra RH al final.
 BLOOD_LABEL_PATTERN = re.compile(
-    r"\b(?:G\s*[.$5S]?\s*[.$5S]?\s*RH|GSRH|G\.?\s*SANG\.?|GRUPO SANGUINEO|"
-    r"TIPO DE SANGRE|BLOOD (?:GROUP|TYPE))\b"
+    r"\b(?:G\s*[.$5S]?\s*[.$5S]?\s*RH|GSRH|G\s*[.$5S]\s*[.$5S]|G\.?\s*SANG\.?|"
+    r"GRUPO SANGUINEO|TIPO DE SANGRE|BLOOD (?:GROUP|TYPE))\b"
 )
 FIRMA_PATTERN = re.compile(r"\bFIRMA\b")
 
@@ -93,7 +94,11 @@ LONG_DATE_PATTERN = re.compile(
 )
 COMPACT_DATE_PATTERN = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
 
-BLOOD_VALUE_PATTERN = re.compile(r"(?<![A-Z0-9])(?P<group>AB|A|B|O|0)\s*(?P<rh>\+|[-])(?!\d)")
+BLOOD_VALUE_PATTERN = re.compile(
+    r"(?<![A-Z0-9])(?P<group>AB|A|B|O|0)\s*(?P<rh>\+|[-])(?!\d)"
+    # El orden inverso ("+0") aparece cuando el OCR lee la casilla al reves.
+    r"|(?<![A-Z0-9])(?P<rh_rev>\+|[-])\s*(?P<group_rev>AB|A|B|O|0)(?![A-Z0-9])"
+)
 
 MONTHS_ES = {
     "ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
@@ -327,8 +332,20 @@ def extract_document_number(lines: Sequence[str]) -> tuple[str | None, float]:
 # ---------------------------------------------------------------------------
 # Nombre
 # ---------------------------------------------------------------------------
+# Tokens que el OCR inventa al transcribir la rubrica del titular y que se
+# cuelan en el valor de NOMBRES ("SARCA.M.", "Fdo.". ...).
+SIGNATURE_TOKEN_PATTERN = re.compile(r"^[A-Z]{1,6}\.(?:[A-Z]\.)+$|^[A-Z]{1,6}\.$")
+
+
+def _clean_name_value(value: str) -> str:
+    """Quita fragmentos de firma del valor de un campo de nombre."""
+    kept = [word for word in _words(value) if not SIGNATURE_TOKEN_PATTERN.match(word)]
+    return " ".join(kept)
+
+
 def _looks_like_person_names(value: str) -> bool:
     """Heuristica: 1-5 palabras alfabeticas que no son etiquetas del documento."""
+    value = _clean_name_value(value)
     words = _words(_clean_value(value))
     if not (1 <= len(words) <= 5):
         return False
@@ -374,15 +391,17 @@ def _label_options(
             continue
 
         remainder = _clean_value(_cut_at_labels(normalized[match.end():], stop_patterns))
-        if remainder and _looks_like_person_names(remainder):
-            options.append(_ValueOption(remainder, "same", index))
+        cleaned = _clean_name_value(remainder)
+        if cleaned and _looks_like_person_names(cleaned):
+            options.append(_ValueOption(cleaned, "same", index))
 
         for source, position in (("next", index + 1), ("previous", index - 1)):
             if not 0 <= position < len(lines):
                 continue
             neighbour = _clean_value(_cut_at_labels(normalize_text(lines[position]), stop_patterns))
-            if neighbour and _looks_like_person_names(neighbour):
-                options.append(_ValueOption(neighbour, source, index))
+            cleaned = _clean_name_value(neighbour)
+            if cleaned and _looks_like_person_names(cleaned):
+                options.append(_ValueOption(cleaned, source, index))
 
     return options
 
@@ -541,30 +560,39 @@ def split_surnames(surnames: str | None) -> tuple[str | None, str | None]:
 # ---------------------------------------------------------------------------
 def _parse_date(value: str) -> str | None:
     """Convierte una fecha del OCR al formato ISO ``YYYY-MM-DD``."""
-    match = DATE_PATTERN.search(value)
-    if match:
+    matches = _parse_date_candidates(value)
+    return matches[0] if matches else None
+
+
+def _parse_date_candidates(value: str) -> list[str]:
+    """Todas las fechas presentes en el texto, en orden de aparicion."""
+    found: list[str] = []
+
+    def add(candidate: str | None) -> None:
+        if candidate and candidate not in found:
+            found.append(candidate)
+
+    for match in DATE_PATTERN.finditer(value):
         day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
         if year < 100:
             year += 2000 if year < 40 else 1900
         if 1 <= month <= 12 and 1 <= day <= 31 and 1900 <= year <= 2100:
-            return f"{year:04d}-{month:02d}-{day:02d}"
+            add(f"{year:04d}-{month:02d}-{day:02d}")
 
-    match = LONG_DATE_PATTERN.search(value)
-    if match:
+    for match in LONG_DATE_PATTERN.finditer(value):
         day, month_name, year = int(match.group(1)), match.group(2)[:3], int(match.group(3))
         month = MONTHS_ES.get(month_name)
         if year < 100:
             year += 2000 if year < 40 else 1900
         if month and 1 <= day <= 31 and 1900 <= year <= 2100:
-            return f"{year:04d}-{month:02d}-{day:02d}"
+            add(f"{year:04d}-{month:02d}-{day:02d}")
 
-    match = COMPACT_DATE_PATTERN.search(value)
-    if match:
+    for match in COMPACT_DATE_PATTERN.finditer(value):
         year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
         if 1900 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31:
-            return f"{year:04d}-{month:02d}-{day:02d}"
+            add(f"{year:04d}-{month:02d}-{day:02d}")
 
-    return None
+    return found
 
 
 def extract_date(
@@ -612,10 +640,16 @@ def extract_date(
         if not match:
             continue
 
-        # 1) La fecha que sigue a la etiqueta dentro de la misma linea.
-        value = _parse_date(normalized[match.end():])
-        if value:
-            return value, 0.85
+        # 1) Fechas que siguen a la etiqueta en la misma linea. Si el OCR
+        #    pego varias zonas ("... 30 ENE 2031 21 AGO 1988"), la de
+        #    nacimiento es la mas antigua y la de vencimiento la mas futura.
+        candidates = _parse_date_candidates(normalized[match.end():])
+        if candidates:
+            if pattern is BIRTH_LABEL_PATTERN:
+                return min(candidates), 0.85
+            if pattern is EXPIRY_LABEL_PATTERN:
+                return max(candidates), 0.85
+            return candidates[0], 0.85
 
         # Fechas vecinas que no llevan otra etiqueta de fecha en su linea.
         previous_date: str | None = None
@@ -713,7 +747,12 @@ def _standalone_sex(text: str) -> str | None:
 def _looks_like_place(value: str) -> bool:
     """Heuristica: al menos tres letras y sin pinta de fecha ni de etiqueta."""
     cleaned = _clean_value(value)
-    if len(re.sub(r"[^A-Z]", "", cleaned)) < 3:
+    letters = re.sub(r"[^A-Z]", "", cleaned)
+    if len(letters) < 3:
+        return False
+    # Ruido tipico del OCR ("C22TA", "3OGOTA"): digitos entremezclados con
+    # letras no son un lugar legible.
+    if any(char.isdigit() for char in cleaned):
         return False
     if _parse_date(cleaned):
         return False
@@ -867,9 +906,26 @@ def _find_blood_value(text: str) -> str | None:
     if not match:
         return None
 
-    # El reconocedor lee a menudo la letra O como un cero.
-    group = "O" if match.group("group") == "0" else match.group("group")
-    return f"{group}{match.group('rh')}"
+    # El reconocedor lee a menudo la letra O como un cero, y a veces invierte
+    # el par ("+0" en lugar de "0+").
+    if match.group("group") is not None:
+        group = match.group("group")
+        rh = match.group("rh")
+    else:
+        group = match.group("group_rev")
+        rh = match.group("rh_rev")
+    group = "O" if group == "0" else group
+    return f"{group}{rh}"
+
+
+def _normalize_country_code(value: str | None) -> str | None:
+    """Corrige la confusion OCR 0/O en codigos ISO de tres letras (``C0L``)."""
+    if not value:
+        return value
+    fixed = re.sub(r"0", "O", value.upper())
+    if re.fullmatch(r"[A-Z]{3}", fixed):
+        return fixed
+    return value.upper()
 
 
 def extract_nationality(lines: Sequence[str]) -> tuple[str | None, str | None]:
@@ -886,7 +942,9 @@ def extract_nationality(lines: Sequence[str]) -> tuple[str | None, str | None]:
         match = NATIONALITY_LABEL_PATTERN.search(normalized)
         if match and nationality is None:
             value = _clean_value(normalized[match.end():])
-            nationality = COUNTRY_CODES.get(value) or (value[:3] if re.fullmatch(r"[A-Z]{3}", value) else None)
+            nationality = COUNTRY_CODES.get(value) or (
+                _normalize_country_code(value) if re.fullmatch(r"[A-Z0O]{3}", value) else None
+            )
 
     if nationality is None and issuant is not None:
         # En un documento nacional la nacionalidad del titular es la del pais
@@ -1241,39 +1299,57 @@ def parse_document(
     confidence_terms: list[float] = []
 
     # ---------------------------- MRZ (prioridad) --------------------------
+    # Solo se confia en la MRZ cuando es consistente (todos los digitos de
+    # control pasan) o cuando el campo concreto supero su propio control. Una
+    # MRZ basura (texto visual detectado como TD3) no debe pisar los campos
+    # que el texto visible ya leyo bien.
     if mrz is not None and mrz.detected:
-        if mrz.document_number:
+        mrz_ok = mrz.valid or mrz.all_checks_passed
+        # Sexo, nacionalidad y pais no tienen digito propio: si las fechas de
+        # la linea 2 superan su control, la franja es real y bastan como
+        # prueba estructural aunque el composite falle por un OCR malo del
+        # numero de documento.
+        structural_ok = mrz_ok or (
+            bool(mrz.checks.get("birth_date")) and bool(mrz.checks.get("expiry_date"))
+        )
+
+        def _mrz_field_ok(check_name: str) -> bool:
+            if mrz_ok:
+                return True
+            return bool(mrz.checks.get(check_name))
+
+        if mrz.document_number and _mrz_field_ok("document_number"):
             result.document_number = mrz.document_number
             result.sources["document_number"] = "mrz"
-            confidence_terms.append(0.95 if mrz.checks.get("document_number") else 0.7)
-        if mrz.full_name:
+            confidence_terms.append(0.95 if mrz.checks.get("document_number") else 0.75)
+        if mrz.full_name and structural_ok:
             result.name = mrz.full_name
             result.sources["name"] = "mrz"
             confidence_terms.append(0.95)
-        if mrz.surname:
+        if mrz.surname and structural_ok:
             result.first_surname, result.second_surname = split_surnames(mrz.surname)
             result.sources["first_surname"] = "mrz"
             if result.second_surname:
                 result.sources["second_surname"] = "mrz"
-        if mrz.given_names:
+        if mrz.given_names and structural_ok:
             result.given_names = mrz.given_names
             result.sources["given_names"] = "mrz"
-        if mrz.birth_date:
+        if mrz.birth_date and _mrz_field_ok("birth_date"):
             result.birth_date = mrz.birth_date.isoformat()
             result.sources["birth_date"] = "mrz"
-            confidence_terms.append(0.95 if mrz.checks.get("birth_date") else 0.7)
-        if mrz.expiry_date:
+            confidence_terms.append(0.95 if mrz.checks.get("birth_date") else 0.75)
+        if mrz.expiry_date and _mrz_field_ok("expiry_date"):
             result.expiry_date = mrz.expiry_date.isoformat()
             result.sources["expiry_date"] = "mrz"
-            confidence_terms.append(0.95 if mrz.checks.get("expiry_date") else 0.7)
-        if mrz.sex:
+            confidence_terms.append(0.95 if mrz.checks.get("expiry_date") else 0.75)
+        if mrz.sex and structural_ok:
             result.sex = mrz.sex
             result.sources["sex"] = "mrz"
-        if mrz.nationality:
-            result.nationality = mrz.nationality
+        if mrz.nationality and structural_ok:
+            result.nationality = _normalize_country_code(mrz.nationality)
             result.sources["nationality"] = "mrz"
-        if mrz.issuing_country:
-            result.issuing_country = mrz.issuing_country
+        if mrz.issuing_country and structural_ok:
+            result.issuing_country = _normalize_country_code(mrz.issuing_country)
             result.sources["issuing_country"] = "mrz"
 
     # ------------------- Codigo de verificacion del reverso -----------------

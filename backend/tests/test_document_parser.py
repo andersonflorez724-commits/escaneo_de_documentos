@@ -53,6 +53,22 @@ CAMERA_OCR_LINES = [
     "13-NOV-2026 0+ M",
 ]
 
+# OCR real de la Cedula de Ciudadan\u00eda (franja tipo TD1 en el reverso).
+CEDULA_CC_OCR_LINES = [
+    "FIRMAMARTNENACIONALLDADESTATURASEXO",
+    "REGISTRADORNACIONALNEZ<GARCIA<<MARIA<DANIELA",
+    "1CC0L000000012<<<<<<<<<<<<<<<<",
+    "8808213F3101300C0L1234567890<9",
+    "APELLIDOS MARTINEZ GARCIA",
+    "NOMBRES SARCA.M. MARIA DANIELA",
+    "NUIP 1.234.567.890",
+    "Fecha de nacimiento 30 ENE 2031 21 AGO 1988 G.S. +0",
+    "FECHA Y LUGAR DE EXPEDICION 23 SEP 2006 BOGOTA D C",
+    "LUGAR DE NACIMIENTO C22TA",
+    "FECHA DE VENCIMIENTO",
+    "30 ENE 2031",
+]
+
 
 class TestNormalization:
     def test_removes_accents_and_uppercases(self) -> None:
@@ -430,3 +446,72 @@ class TestCameraCaptureWithoutLabels:
         assert fields.birth_date == "2008-09-20"
         assert fields.expiry_date is None
         assert fields.issue_date is None
+
+
+class TestCedulaDeCiudadania:
+    """OCR real de la Cedula colombiana con franja tipo TD1."""
+
+    def test_reads_every_field(self) -> None:
+        from app.services.mrz import extract_and_validate
+
+        mrz = extract_and_validate(CEDULA_CC_OCR_LINES)
+        fields = parse_document(CEDULA_CC_OCR_LINES, mrz)
+
+        assert mrz.mrz_format == "TD1"
+        assert fields.document_number == "1234567890"
+        assert fields.first_surname == "MARTINEZ"
+        assert fields.second_surname == "GARCIA"
+        assert fields.given_names == "MARIA DANIELA"
+        assert fields.name == "MARIA DANIELA MARTINEZ GARCIA"
+        assert fields.birth_date == "1988-08-21"
+        assert fields.expiry_date == "2031-01-30"
+        assert fields.sex == "F"
+        assert fields.blood_type == "O+"
+        assert fields.nationality == "COL"
+        assert fields.issue_date == "2006-09-23"
+        assert fields.issue_place == "BOGOTA D C"
+        # La firma no se cuela en los nombres y el ruido no es lugar.
+        assert "SARCA" not in (fields.given_names or "")
+        assert fields.birth_place is None
+
+    def test_birth_label_with_two_dates_picks_the_oldest(self) -> None:
+        value, _ = extract_date(
+            ["Fecha de nacimiento 30 ENE 2031 21 AGO 1988"],
+            BIRTH_LABEL_PATTERN,
+        )
+        assert value == "1988-08-21"
+
+    def test_expiry_label_with_two_dates_picks_the_newest(self) -> None:
+        value, _ = extract_date(
+            ["FECHA DE VENCIMIENTO 30 ENE 2031 21 AGO 1988"],
+            EXPIRY_LABEL_PATTERN,
+        )
+        assert value == "2031-01-30"
+
+    def test_blood_type_label_without_rh_word(self) -> None:
+        value, _ = extract_blood_type(["21 AGO 1988 G.S. +0"])
+        assert value == "O+"
+
+    def test_signature_token_is_stripped_from_names(self) -> None:
+        value, _ = extract_name(["NOMBRES", "SARCA.M. MARIA DANIELA"])
+        assert value == "MARIA DANIELA"
+
+    def test_mrz_noise_does_not_overwrite_visual_fields(self) -> None:
+        from app.services.mrz import parse_mrz
+
+        # Texto visual detectado por error como MRZ basura.
+        mrz = parse_mrz(
+            [
+                "FIRMAMARTNENACIONALLDADESTATURASEXO<<<<<<<<<",
+                "1CC0L000000012<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<",
+            ]
+        )
+        fields = parse_document(
+            ["NUIP 1.234.567.890", "NOMBRES", "MARIA DANIELA", "APELLIDOS", "MARTINEZ GARCIA"],
+            mrz,
+        )
+
+        assert fields.document_number == "1234567890"
+        assert fields.name == "MARIA DANIELA MARTINEZ GARCIA"
+        assert fields.sources["document_number"] == "visual"
+        assert fields.sources["name"] == "visual"

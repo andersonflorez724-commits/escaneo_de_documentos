@@ -62,6 +62,21 @@ COLOMBIAN_CODE_PATTERN = re.compile(
     r"(?P<sex>[MF])\s*-\s*(?P<number>\d{6,12})\s*-\s*(?P<date>\d{8})"
 )
 
+# Renglones de texto visual que el OCR devuelve con rellenos '<' y longitud
+# compatible con la MRZ (firmas, encabezados de la oficina). Si entran como
+# candidatos, la deteccion de formato se inclina a TD3 y arruina el parseo.
+VISUAL_NOISE_PREFIXES = (
+    "FIRMA",
+    "REGISTRADOR",
+    "REGISTRADURIA",
+    "REPUBLICA",
+    "MINISTERIO",
+    "IDENTIFICACION",
+    "CEDULA",
+    "SECRETARIO",
+    "NOTARIO",
+)
+
 # Tope de lecturas alternativas que se prueban al elegir la mejor combinacion.
 MAX_MRZ_CANDIDATES = 6
 
@@ -180,17 +195,27 @@ def _has_mrz_structure(cleaned: str) -> bool:
     )
 
 
+def _looks_like_visual_noise(cleaned: str) -> bool:
+    """Texto de la cara del documento que no pertenece a la franja MRZ."""
+    return any(cleaned.startswith(prefix) for prefix in VISUAL_NOISE_PREFIXES)
+
+
 def _is_plausible_line(cleaned: str) -> bool:
     """Una linea MRZ plausible trae rellenos ``<`` o la estructura oficial.
 
     Exigir rellenos evita que un renglon normal del documento con muchos
     caracteres (por ejemplo ``FECHA DE VENCIMIENTO 20-SEP-2026``, que al
     normalizarse queda como una cadena larga de letras y digitos) se lea como
-    una MRZ y contamine los campos.
+    una MRZ y contamine los campos. Una cadena solo de letras (la firma u
+    otro encabezado) tampoco es MRZ: ni rellenos ni digitos.
     """
     if len(cleaned) < TD1_LINE_LENGTH:
         return False
     if not MRZ_LINE_PATTERN.match(cleaned):
+        return False
+    if _looks_like_visual_noise(cleaned):
+        return False
+    if FILLER not in cleaned and not any(char.isdigit() for char in cleaned):
         return False
 
     filler_ratio = cleaned.count(FILLER) / len(cleaned)
@@ -271,13 +296,30 @@ def detect_format(lines: list[str]) -> str | None:
     """Infiere el formato MRZ a partir de las longitudes de las lineas.
 
     El OCR puede recortar caracteres, por eso el criterio principal es la
-    longitud de la linea mas larga y no una coincidencia exacta.
+    longitud de la linea mas larga y no una coincidencia exacta. Cuando hay
+    al menos dos renglones con estructura TD1, manda TD1 aunque otra linea
+    mas larga de ruido (texto visual pegado a 44 caracteres) haya entrado como
+    candidata: la Cedula colombiana se lee como franja 3x30.
     """
     lengths = [len(line) for line in lines if line]
     if not lengths:
         return None
 
     longest = max(lengths)
+
+    td1_structured = [
+        line
+        for line in lines
+        if line
+        and len(line) <= TD1_LINE_LENGTH + 3
+        and (
+            looks_like_td1_header(line)
+            or looks_like_td1_middle(line)
+            or looks_like_td1_name(line)
+        )
+    ]
+    if len(td1_structured) >= 2:
+        return "TD1"
 
     # Tres lineas cortas solo pueden ser TD1 (cedulas y DNI).
     if len(lengths) >= 3 and longest <= TD1_LINE_LENGTH + 3:
@@ -328,8 +370,15 @@ def looks_like_data_line(line: str) -> bool:
 
 
 def looks_like_td1_header(line: str) -> bool:
-    """Linea 1 de TD1: codigo de pais seguido del numero de documento."""
-    return bool(_TD1_HEADER_RE.match(line)) and any(char.isdigit() for char in line[:15])
+    """Linea 1 de TD1: codigo de pais seguido del numero de documento.
+
+    El numero ocupa las posiciones 5-13; bastan digitos ahi para no confundir
+    el renglon con texto visual. Se tolera OCR en el prefijo (``1CC0L`` en
+    vez de ``ICCOL``).
+    """
+    if len(line) < 15:
+        return False
+    return sum(char.isdigit() for char in line[5:15]) >= 5
 
 
 def looks_like_td1_middle(line: str) -> bool:
@@ -686,6 +735,8 @@ def _parse_td1(lines: list[str], result: MRZResult) -> None:
     result.issuing_country = first[2:5].strip(FILLER) or None
     result.surname, result.given_names = _split_names(third[0:30])
 
+    # El campo opcional de la linea 2 (11 chars) no tiene digito de control
+    # propio en ICAO TD1: solo se valida si el documento imprimio uno real.
     _fill_common_fields(
         result,
         document_number_field=first[5:14],
@@ -730,14 +781,22 @@ def _fill_common_fields(
     result.expiry_date = _expand_yymmdd(expiry_field, kind="expiry")
 
     result.checks = {
-        "document_number": verify_check_digit(document_number_field, document_number_check),
         "birth_date": verify_check_digit(birth_field, birth_check),
         "expiry_date": verify_check_digit(expiry_field, expiry_check),
         "composite": verify_check_digit(composite_field, composite_check),
     }
 
-    # El numero personal solo se valida si el documento lo utiliza.
-    if personal_field.strip(FILLER):
+    # Un '<' impreso en la casilla de control significa "no usado" en los
+    # documentos que no siguen ICAO al pie de la letra (la franja de la
+    # Cedula colombiana). No se anade a los checks para no marcarlo falla.
+    if document_number_check != FILLER:
+        result.checks["document_number"] = verify_check_digit(
+            document_number_field, document_number_check
+        )
+
+    # El numero personal solo se valida si el documento lo utiliza y trae un
+    # digito de control real (no '<').
+    if personal_field.strip(FILLER) and personal_check != FILLER:
         result.checks["personal_number"] = verify_check_digit(personal_field, personal_check)
 
     if result.birth_date is None:
