@@ -55,8 +55,11 @@ DOCUMENT_TYPE_BY_MRZ_CODE = {
     "V": "VISA",
 }
 
+# El OCR de la camara trunca y confunde letras en los rotulos pequenos:
+# "APBOS" por APELLIDOS, "NUME" por NUMERO, etc. Los patrones admiten esas
+# variantes para no perder el valor que acompana al rotulo.
 NUMBER_LABEL_PATTERN = re.compile(
-    r"\b(?:NUIP|NIP|NO|N[RO]|NUM|NUMERO|No\.|DOC|DOCUMENTO|CEDULA|C\.C\.|CC|DNI|ID|"
+    r"\b(?:NUIP|NIP|NO|N[RO]|NUM|NUME[RO]?|No\.|DOC|DOCUMENTO|CEDULA|C\.C\.|CC|DNI|ID|"
     r"IDENTIFICACION|PASAPORTE|PASSPORT)\b"
 )
 BIRTH_LABEL_PATTERN = re.compile(r"\b(?:FECHA DE NACIMIENTO|FECHA NACIMIENTO|F\.?\s?NAC|NACIMIENTO|BIRTH|BORN)\b")
@@ -65,8 +68,8 @@ BIRTH_PLACE_LABEL_PATTERN = re.compile(
 )
 EXPIRY_LABEL_PATTERN = re.compile(r"\b(?:VENCIMIENTO|CADUCIDAD|EXPIRY|EXPIRES|FECHA DE VENCIMIENTO|VALID[OA]?)\b")
 ISSUE_LABEL_PATTERN = re.compile(r"\b(?:FECHA Y LUGAR DE EXPEDICION|FECHA DE EXPEDICION|EXPEDICION|EXPEDIDO|EXPEDIDA|ISSUE[D]?)\b")
-NAME_LABEL_PATTERN = re.compile(r"\b(?:NOMBRES|NOMBRE|APELLIDOS|APELLIDO|GIVEN NAMES|SURNAME)\b")
-SURNAME_LABEL_PATTERN = re.compile(r"\b(?:APELLIDOS|APELLIDO|SURNAMES?)\b")
+NAME_LABEL_PATTERN = re.compile(r"\b(?:NOMBRES|NOMBRE|APELLIDOS?|APBOS|APBLL?IDOS|APELLDOS|GIVEN NAMES|SURNAME)\b")
+SURNAME_LABEL_PATTERN = re.compile(r"\b(?:APELLIDOS?|APBOS|APBLL?IDOS|APELLDOS|SURNAMES?)\b")
 GIVEN_NAME_LABEL_PATTERN = re.compile(r"\b(?:NOMBRES|NOMBRE|GIVEN NAMES?)\b")
 NATIONALITY_LABEL_PATTERN = re.compile(r"\b(?:NACIONALIDAD|NATIONALITY|NAC\.?)\b")
 # El OCR confunde la "S" de "G S RH" con el simbolo del dolar y el "O" del
@@ -120,13 +123,13 @@ NAME_STOPWORDS = frozenset(
         "CHILE", "ARGENTINA", "ECUADOR", "VENEZUELA", "BOLIVIA", "PANAMA", "ESPANA",
         "CEDULA", "CIUDADANIA", "EXTRANJERIA", "PASAPORTE", "PASSPORT", "TARJETA",
         "IDENTIDAD", "IDENTIFICACION", "DOCUMENTO", "NACIONAL", "REGISTRO", "CIVIL",
-        "NOMBRES", "NOMBRE", "APELLIDOS", "APELLIDO", "GIVEN", "NAMES", "SURNAME",
+        "NOMBRES", "NOMBRE", "APELLIDOS", "APELLIDO", "APBOS", "GIVEN", "NAMES", "SURNAME",
         "FECHA", "NACIMIENTO", "EXPEDICION", "VENCIMIENTO", "CADUCIDAD", "SEXO",
         "NACIONALIDAD", "FIRMA", "REPUBLIC", "REGISTRADURIA", "MINISTERIO", "LICENCIA",
         "CONDUCCION", "CATEGORIA", "RESTRICCION", "ORGANISMO", "TRANSITO", "EMISION",
         "PRIMER", "SEGUNDO", "LUGAR", "ESTATURA", "GRUPO", "SANGUINEO", "RH", "TIPO",
         "MUESTRA", "SIN", "VALIDEZ", "TITULAR", "MENOR", "ADULTO", "MASCULINO", "FEMENINO",
-        "NUMERO", "CARD", "NATIONAL", "UNITED", "STATES", "IDENTITY", "ID", "BEARER",
+        "NUMERO", "NUME", "CARD", "NATIONAL", "UNITED", "STATES", "IDENTITY", "ID", "BEARER",
         "NUIP", "REGISTRADOR", "NOTARIO", "ALCALDE", "GERENTE", "DELEGADO", "SECRETARIO",
         "PERSONAL", "REVERSO", "FRONTAL", "CARA", "INDICE", "DERECHO", "IZQUIERDO",
         "PULGAR", "ANULAR", "HUELLA", "CODIGO", "VERIFICACION",
@@ -140,9 +143,9 @@ HARD_LABEL_WORDS = frozenset(
     {
         "REPUBLICA", "CEDULA", "CIUDADANIA", "EXTRANJERIA", "PASAPORTE", "PASSPORT",
         "TARJETA", "IDENTIDAD", "IDENTIFICACION", "DOCUMENTO", "NACIONAL", "REGISTRO",
-        "CIVIL", "NOMBRES", "NOMBRE", "APELLIDOS", "APELLIDO", "GIVEN", "NAMES",
+        "CIVIL", "NOMBRES", "NOMBRE", "APELLIDOS", "APELLIDO", "APBOS", "GIVEN", "NAMES",
         "SURNAME", "FECHA", "NACIMIENTO", "EXPEDICION", "VENCIMIENTO", "CADUCIDAD",
-        "SEXO", "NACIONALIDAD", "FIRMA", "NUMERO", "NUIP", "LUGAR", "GRUPO",
+        "SEXO", "NACIONALIDAD", "FIRMA", "NUMERO", "NUME", "NUIP", "LUGAR", "GRUPO",
         "SANGUINEO", "RH", "REGISTRADOR", "NOTARIO", "MINISTERIO", "REGISTRADURIA",
         "COLOMBIA", "PERU", "MEXICO", "CHILE", "ARGENTINA", "ECUADOR", "VENEZUELA",
         "BOLIVIA", "PANAMA", "ESPANA", "LICENCIA", "CONDUCCION", "TIPO", "ESTATURA",
@@ -451,6 +454,39 @@ def extract_names(lines: Sequence[str]) -> tuple[str | None, str | None]:
         GIVEN_NAME_LABEL_PATTERN,
         stop_patterns=(SURNAME_LABEL_PATTERN, NAME_LABEL_PATTERN, BIRTH_LABEL_PATTERN),
     )
+
+    # La Tarjeta de Identidad a veces pierde el rotulo NOMBRES en la foto
+    # ("APBOS" siquiera es APELLIDOS leido mal). Si hay rotulo de apellidos
+    # pero no de nombres, el valor de la linea siguiente al rotulo es casi
+    # siempre el de NOMBRES y el de la linea anterior el de APELLIDOS.
+    if surname_options and not given_options:
+        by_line: dict[int, list[_ValueOption]] = {}
+        for option in surname_options:
+            by_line.setdefault(option.line_index, []).append(option)
+        for options in by_line.values():
+            previous = next((item for item in options if item.source == "previous"), None)
+            following = next((item for item in options if item.source == "next"), None)
+            if previous is None or following is None or previous.value == following.value:
+                continue
+            # El valor de apellidos suele llevar dos apellidos; los nombres,
+            # uno o dos nombres de pila. Con esa pista se emparejan sin
+            # esperar a que el OCR lea el rotulo NOMBRES.
+            previous_words = _words(previous.value)
+            following_words = _words(following.value)
+            if len(previous_words) >= 2 or (
+                len(following_words) <= 2 and len(previous_words) >= 1
+            ):
+                given_options.append(
+                    _ValueOption(following.value, "next", following.line_index)
+                )
+                # Evita que la misma linea de "next" compita como apellidos.
+                surname_options = [
+                    item
+                    for item in surname_options
+                    if not (item.line_index == following.line_index and item.source == "next")
+                ]
+                break
+
     if not surname_options and not given_options:
         return None, None
 
@@ -719,12 +755,13 @@ def extract_sex(lines: Sequence[str]) -> str | None:
                     return value
 
     # 3) Sin etiqueta visible (captura con camara): el valor viaja en la misma
-    #    linea que una fecha o el grupo sanguineo ("13-NOV-2026 0+ M").
+    #    linea que una fecha o el grupo sanguineo ("13-NOV-2026 0+ M" o el
+    #    "0+M" pegado que deja el OCR del reverso).
     for line in lines:
         normalized = normalize_text(line)
         if not (_parse_date(normalized) or BLOOD_VALUE_PATTERN.search(normalized)):
             continue
-        value = _standalone_sex(normalized)
+        value = _sex_after_blood(normalized) or _standalone_sex(normalized)
         if value:
             return value
 
@@ -739,6 +776,18 @@ def _standalone_sex(text: str) -> str | None:
         if token in {"F", "FEMENINO"}:
             return "F"
     return None
+
+
+def _sex_after_blood(text: str) -> str | None:
+    """Lee el sexo pegado al grupo sanguineo (``O+M``, ``0+ F``)."""
+    match = re.search(
+        r"(?:AB|A|B|O|0)\s*(?:\+|-)\s*(?P<sex>[MF])\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return match.group("sex").upper()
 
 
 # ---------------------------------------------------------------------------

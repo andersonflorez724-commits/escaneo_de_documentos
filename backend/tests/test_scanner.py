@@ -13,7 +13,7 @@ from app.core.errors import PayloadTooLargeError
 from app.services.face_detector import HeuristicFaceDetector
 from app.services.image_utils import InvalidImageError
 from app.services.scanner import DocumentScanner, ScanResult, mask_document_number
-from app.services.ocr_engine import get_ocr_engine
+from app.services.ocr_engine import TextBlock, get_ocr_engine
 from tests.fixtures import (
     ICAO_TD3_LINES,
     TARJETA_IDENTIDAD_BACK_TEXT,
@@ -118,6 +118,72 @@ class TestScanPipeline:
 
     def test_processing_time_is_measured(self) -> None:
         assert build_scanner().scan(document_bytes()).processing_ms > 0
+
+
+class SexBandStubOCREngine(StubOCREngine):
+    """Pagina completa sin sexo; solo la franja estrecha aporta la M.
+
+    Distingue los recortes por su geometria: la franja MRZ se amplia a
+    ``min_width=1600`` y la de sexo a ``1400``, asi las pasadas de MRZ no
+    contaminan el texto de la pagina.
+    """
+
+    def __init__(self, page_texts: list[str], band_texts: list[str]) -> None:
+        super().__init__(page_texts)
+        self.band_texts = list(band_texts)
+        self.band_calls = 0
+
+    def read(self, image: np.ndarray) -> list[TextBlock]:
+        height, width = image.shape[:2]
+        if height >= 500:
+            texts = self.texts
+        elif width >= 1550:
+            # Franja MRZ (upscaled a 1600): este documento no tiene MRZ.
+            texts = []
+        else:
+            self.band_calls += 1
+            texts = self.band_texts
+
+        self.calls.append((height, width))
+        blocks: list[TextBlock] = []
+        for index, text in enumerate(texts):
+            position = (index + 1) / (len(texts) + 1)
+            blocks.append(
+                TextBlock(
+                    text=text,
+                    confidence=self.confidence,
+                    box=(10, int(height * position), max(1, width - 20), 30),
+                    rel_box=(0.01, position, 0.98, 0.05),
+                )
+            )
+        return blocks
+
+
+class TestSexBandReread:
+    """La casilla SEXO que pierde la lectura de pagina completa."""
+
+    def test_rereads_the_band_when_sex_is_missing(self) -> None:
+        page = [
+            "TARJETA DE IDENTIDAD",
+            "1.020.116.685",
+            "FLOREZ FLOREZ",
+            "APBOS",
+            "ANDERSON",
+            "13-NOV-2026 O+",
+        ]
+        engine = SexBandStubOCREngine(page, ["FECHA DE VENCIMIENTO G S RH SEXO", "13-NOV-2026 O+ M"])
+        scanner = DocumentScanner(
+            engine=engine,
+            face_detector=HeuristicFaceDetector(),
+            settings=get_settings(),
+        )
+
+        result = scanner.scan(document_bytes())
+
+        assert engine.band_calls >= 1
+        assert result.fields.sex == "M"
+        assert result.fields.blood_type == "O+"
+        assert result.fields.name == "ANDERSON FLOREZ FLOREZ"
 
 
 class TestPreprocessing:

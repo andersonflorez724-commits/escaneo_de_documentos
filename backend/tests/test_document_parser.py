@@ -448,6 +448,55 @@ class TestCameraCaptureWithoutLabels:
         assert fields.issue_date is None
 
 
+class TestCameraOcrMangledLabels:
+    """OCR real de camara: rotulos truncados (APBOS, NUME) y sexo pegado."""
+
+    # Lineas tal como las devolvio el lector sobre una Tarjeta de Identidad.
+    TI_CAMERA_OCR_LINES = [
+        "REPÚBLICA DE COLOMBIA",
+        "IDENTIFICACIÓN PERSONAL",
+        "TARJETA DE IDENTIDAD",
+        "NUME 1.020.116.685",
+        "FLOREZ FLOREZ",
+        "APBOS",
+        "ANDERSON",
+        "0082370101",
+        "MEDELLIN 13-NOV-2008",
+        "(ANTIOQUIA)",
+        "13-NOV-2026 O+",
+        "23-DIC-2015 MEDELLIN",
+        "t",
+    ]
+
+    def test_apbos_is_read_as_the_surname_label(self) -> None:
+        fields = parse_document(self.TI_CAMERA_OCR_LINES)
+
+        assert fields.first_surname == "FLOREZ"
+        assert fields.second_surname == "FLOREZ"
+        assert fields.given_names == "ANDERSON"
+        assert fields.name == "ANDERSON FLOREZ FLOREZ"
+        assert fields.document_number == "1020116685"
+
+    def test_nume_label_still_finds_the_document_number(self) -> None:
+        fields = parse_document(["NUME 1.020.116.685"])
+
+        assert fields.document_number == "1020116685"
+
+    def test_sex_glued_to_the_blood_type(self) -> None:
+        assert extract_sex(["13-NOV-2026 O+M"]) == "M"
+        assert extract_sex(["13-NOV-2026 O+ F"]) == "F"
+
+    def test_sex_stays_none_when_the_letter_was_not_ocrd(self) -> None:
+        # La M del reverso no llego en el texto: el parser no debe inventarla
+        # (la relectura de franja del scanner es la que la recupera).
+        fields = parse_document(self.TI_CAMERA_OCR_LINES)
+
+        assert fields.sex is None
+        assert fields.blood_type == "O+"
+        assert fields.expiry_date == "2026-11-13"
+        assert fields.birth_date == "2008-11-13"
+
+
 class TestCedulaDeCiudadania:
     """OCR real de la Cedula colombiana con franja tipo TD1."""
 

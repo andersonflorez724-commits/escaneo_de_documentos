@@ -240,6 +240,10 @@ class _SideAnalysis:
     quality: ImageQuality | None = None
     face: FaceDetection | None = None
     warnings: list[str] = field(default_factory=list)
+    # Documento recortado y enderezado: se conserva para relecturas
+    # puntuales (por ejemplo la casilla SEXO que el OCR de pagina completa
+    # suele perder en la Tarjeta de Identidad).
+    image: np.ndarray | None = None
 
 
 class DocumentScanner:
@@ -365,6 +369,21 @@ class DocumentScanner:
         fields = parse_document(lines, mrz)
         warnings.extend(fields.warnings)
 
+        # El reverso de la Tarjeta de Identidad imprime SEXO con una letra
+        # pequena al lado del grupo sanguineo; la lectura de pagina completa
+        # la perdio en capturas con camara. Si falta y hay indicios del
+        # reverso (sangre o vencimiento), se relee la franja horizontal de
+        # ese dato y solo se inyecta el sexo (los bloques del recorte tienen
+        # coordenadas relativas al recorte y no deben entrar al reparseo).
+        if not fields.sex and self.engine.supports_recognition and any(
+            token in " ".join(lines).upper()
+            for token in ("O+", "0+", "A+", "B+", "VENCIMIENTO")
+        ):
+            band_sex = self._read_missing_sex(usable)
+            if band_sex:
+                fields.sex = band_sex
+                fields.sources["sex"] = "visual"
+
         face = self._best_face(usable)
         quality = self._best_quality(usable)
         self.used_mrz_passes = any(analysis.info.used_mrz_passes for analysis in usable)
@@ -476,6 +495,7 @@ class DocumentScanner:
                 blocks.extend(self._read_mrz_passes(image, already_read=blocks))
 
             analysis.blocks = blocks
+            analysis.image = image
             info.text_lines = [block.text for block in blocks]
 
             # 8. Vista previa opcional de la cara procesada.
@@ -519,6 +539,55 @@ class DocumentScanner:
                 break
 
         return collected
+
+    def _read_missing_sex(self, analyses: Sequence[_SideAnalysis]) -> str | None:
+        """Relee la franja horizontal del campo SEXO cuando la pagina fallo.
+
+        En la Tarjeta de Identidad colombiana SEXO comparte renglon con la
+        fecha de vencimiento y el grupo sanguineo. Si el OCR de pagina
+        completa dejo ``13-NOV-2026 O+`` sin la M/F final, se recorta una
+        banda alrededor de ese renglon y se vuelve a leer. Solo devuelve la
+        letra M/F encontrada: los bloques del recorte no se mezclan con los
+        de la pagina completa porque sus coordenadas son relativas al recorte.
+        """
+        from app.services.document_parser import extract_sex
+
+        for analysis in analyses:
+            if analysis.image is None:
+                continue
+
+            image = analysis.image
+            height = image.shape[0]
+
+            # Preferencia: el renglon del grupo sanguineo o de vencimiento.
+            target = 0.45
+            found_target = False
+            for block in analysis.blocks:
+                text = block.text.upper()
+                if any(token in text for token in ("O+", "0+", "A+", "B+", "VENCIMIENTO", "SEXO")):
+                    target = block.y_center
+                    found_target = True
+                    break
+            if not found_target:
+                # Sin pista de la casilla no se gasta inferencia: la mitad
+                # de la imagen es un recorte ciego casi siempre inutil.
+                continue
+
+            band_height = max(48, int(height * 0.16))
+            top = max(0, int(height * target) - band_height // 2)
+            bottom = min(height, top + band_height)
+            band = image[top:bottom, :]
+            if band.size == 0:
+                continue
+            band = upscale_small(band, min_width=1400)
+
+            for transform in (enhance_for_ocr, adaptive_binarize):
+                found = self.engine.read(transform(band))
+                sex = extract_sex([block.text for block in found])
+                if sex:
+                    return sex
+
+        return None
 
     @staticmethod
     def _best_face(analyses: Sequence[_SideAnalysis]) -> FaceDetection:
